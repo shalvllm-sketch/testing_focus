@@ -11,3 +11,9 @@ pandas
 openpyxl
 faiss-cpu
 streamlit
+streamlit
+requests
+pandas
+openpyxl
+sentence-transformers
+torch
