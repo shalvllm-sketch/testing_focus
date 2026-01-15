@@ -1,0 +1,13 @@
+Flask
+flask-cors
+python-dotenv
+requests
+hypercorn
+langchain
+langchain-core
+langchain-openai
+langchain-community
+pandas
+openpyxl
+faiss-cpu
+streamlit
