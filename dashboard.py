@@ -17,7 +17,7 @@ def load_semantic_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
 
 st.title("🧪 Focus 2026 API QA Suite")
-st.markdown("Upload **FAQ Original** or **Variations File**. The system auto-detects columns and calculates **Semantic Accuracy**.")
+st.markdown("Upload your **Variations File**. The system auto-detects `Question`, `Response`, and `User Type`.")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -84,7 +84,7 @@ tab1, tab2 = st.tabs(["📝 Manual Check", "🚀 Bulk Variations Test"])
 with tab1:
     col1, col2 = st.columns([4, 1])
     with col1:
-        q = st.text_input("Ask a question:", placeholder="e.g. Where is my hotel?")
+        q = st.text_input("Ask a question:", placeholder="e.g. Who is the Kolkata rep?")
     with col2:
         st.write("") 
         st.write("") 
@@ -100,7 +100,7 @@ with tab1:
 # --- TAB 2: BULK TEST ---
 with tab2:
     st.subheader("Upload Test File")
-    st.info("Compatible with: `faq.xlsx` (Original) AND `faq_variations.xlsx` (Generated).")
+    st.info("Required Columns: `Question`, `Response`, `User Type`.")
     
     uploaded_file = st.file_uploader("Choose file", type=["csv", "xlsx"])
     
@@ -112,29 +112,30 @@ with tab2:
             else:
                 df = pd.read_excel(uploaded_file)
             
-            # 1. NORMALIZE COLUMNS (Handle both file formats)
-            # Strip spaces
+            # 1. NORMALIZE COLUMNS
             df.columns = df.columns.str.strip()
             
-            # Map 'User Type' OR 'User_type' -> 'User_Type_Final'
-            if 'User_type' in df.columns:
-                df['User_Type_Final'] = df['User_type']
-            elif 'User Type' in df.columns:
-                df['User_Type_Final'] = df['User Type']
+            # 2. SMART MAPPING (Handles your specific file headers)
+            # Map 'User Type' -> 'run_user_type'
+            if 'User Type' in df.columns:
+                df['run_user_type'] = df['User Type']
+            elif 'User_type' in df.columns:
+                df['run_user_type'] = df['User_type']
             else:
-                df['User_Type_Final'] = global_user_type
+                df['run_user_type'] = global_user_type
 
-            # Map 'Response' OR 'Expected Answer' -> 'Expected_Final'
-            if 'Expected Answer' in df.columns:
-                df['Expected_Final'] = df['Expected Answer']
-            elif 'Response' in df.columns:
-                df['Expected_Final'] = df['Response']
+            # Map 'Response' -> 'expected_answer'
+            if 'Response' in df.columns:
+                df['expected_answer'] = df['Response']
+            elif 'Expected Answer' in df.columns:
+                df['expected_answer'] = df['Expected Answer']
             else:
-                df['Expected_Final'] = None
+                df['expected_answer'] = None
 
             # Check Mandatory Column
             if "Question" not in df.columns:
                 st.error("❌ File MUST have a column named **'Question'**.")
+                st.write("Found columns:", list(df.columns))
             else:
                 st.success(f"✅ Loaded {len(df)} rows.")
                 
@@ -146,8 +147,9 @@ with tab2:
                     
                     for i, row in df.iterrows():
                         question = row['Question']
-                        u_type = row['User_Type_Final']
-                        expected = row['Expected_Final']
+                        u_type = row['run_user_type']
+                        expected = row['expected_answer']
+                        is_var = row.get('Is_variation', 'N/A') # Capture variation flag if present
                         
                         # Handle NaN
                         if pd.isna(expected): expected = None
@@ -173,6 +175,7 @@ with tab2:
                         results.append({
                             "ID": i+1,
                             "User Type": u_type,
+                            "Is Variation": is_var,
                             "Question": question,
                             "Expected": expected,
                             "Actual": actual,
