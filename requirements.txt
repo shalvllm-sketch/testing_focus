@@ -17,3 +17,11 @@ pandas
 openpyxl
 sentence-transformers
 torch
+
+
+streamlit
+requests
+pandas
+openpyxl
+sentence-transformers
+torch
