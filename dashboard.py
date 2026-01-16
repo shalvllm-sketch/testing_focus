@@ -1,11 +1,8 @@
-
-
-
-
 import streamlit as st
 import requests
 import pandas as pd
 import time
+from sentence_transformers import SentenceTransformer, util
 
 # --- CONFIGURATION ---
 API_URL = "https://functional-h3cjbjeeenhfapcx.canadacentral-01.azurewebsites.net/focus/faq"
@@ -13,32 +10,39 @@ API_KEY = "GN^CBB4185E5BFDAEDF7B1F172EE5F21"
 
 st.set_page_config(page_title="Focus 2026 QA Dashboard", layout="wide", page_icon="🧪")
 
-st.title("🧪 Focus 2026 API QA Suite")
-st.markdown("Upload your FAQ file directly. The system will handle missing S.No automatically.")
+# --- LOAD AI MODEL (Cached) ---
+@st.cache_resource
+def load_semantic_model():
+    # Downloads a small, fast AI model to judge answer quality
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
-# --- SIDEBAR CONFIG ---
+st.title("🧪 Focus 2026 API QA Suite")
+st.markdown("Upload **FAQ Original** or **Variations File**. The system auto-detects columns and calculates **Semantic Accuracy**.")
+
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Configuration")
-    global_user_type = st.selectbox("Default User Type (Fallback)", ["Employee", "Client"])
+    global_user_type = st.selectbox("Fallback User Type", ["Employee", "Client"])
     
     st.divider()
+    with st.spinner("Loading AI Judge..."):
+        model = load_semantic_model()
+    st.success("✅ AI Judge Ready")
+    
     with st.expander("Advanced Params", expanded=False):
         vertical = st.text_input("Vertical", "")
         unit = st.text_input("Unit", "")
         company = st.text_input("Company", "Genpact")
 
-# --- ROBUST API FUNCTION ---
+# --- API FUNCTION ---
 def call_bot_safe(query, u_type):
-    """
-    Calls the bot and handles ANY crash so the loop never stops.
-    """
-    # Safety: If file has empty User Type, use the Global Default
+    # Fallback if User Type is missing in the file
     if pd.isna(u_type) or str(u_type).strip() == "":
         u_type = global_user_type
         
     headers = {"Content-Type": "application/json", "X-API-KEY": API_KEY}
     payload = {
-        "query": str(query), # Ensure it's a string
+        "query": str(query),
         "user_type": u_type,
         "vertical": vertical,
         "unit": unit,
@@ -65,7 +69,6 @@ def call_bot_safe(query, u_type):
                 "Time(s)": duration,
                 "Status": "FAIL"
             }
-            
     except Exception as e:
         return {
             "Actual Answer": f"Exception: {str(e)}",
@@ -74,8 +77,8 @@ def call_bot_safe(query, u_type):
             "Status": "CRASH"
         }
 
-# --- TABS ---
-tab1, tab2 = st.tabs(["📝 Single Query", "🚀 Bulk Upload & Test"])
+# --- UI TABS ---
+tab1, tab2 = st.tabs(["📝 Manual Check", "🚀 Bulk Variations Test"])
 
 # --- TAB 1: MANUAL ---
 with tab1:
@@ -96,31 +99,46 @@ with tab1:
 
 # --- TAB 2: BULK TEST ---
 with tab2:
-    st.subheader("Upload FAQ File")
-    st.info("Supports CSV or Excel (.xlsx). Required column: **'Question'**. Optional: 'User Type', 'Response'.")
+    st.subheader("Upload Test File")
+    st.info("Compatible with: `faq.xlsx` (Original) AND `faq_variations.xlsx` (Generated).")
     
-    # Allow both CSV and Excel
     uploaded_file = st.file_uploader("Choose file", type=["csv", "xlsx"])
     
     if uploaded_file is not None:
         try:
-            # Load based on extension
+            # Load Data
             if uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
             
-            # Clean column names (strip spaces like 'User Type ' -> 'User Type')
+            # 1. NORMALIZE COLUMNS (Handle both file formats)
+            # Strip spaces
             df.columns = df.columns.str.strip()
             
-            # Validation
+            # Map 'User Type' OR 'User_type' -> 'User_Type_Final'
+            if 'User_type' in df.columns:
+                df['User_Type_Final'] = df['User_type']
+            elif 'User Type' in df.columns:
+                df['User_Type_Final'] = df['User Type']
+            else:
+                df['User_Type_Final'] = global_user_type
+
+            # Map 'Response' OR 'Expected Answer' -> 'Expected_Final'
+            if 'Expected Answer' in df.columns:
+                df['Expected_Final'] = df['Expected Answer']
+            elif 'Response' in df.columns:
+                df['Expected_Final'] = df['Response']
+            else:
+                df['Expected_Final'] = None
+
+            # Check Mandatory Column
             if "Question" not in df.columns:
                 st.error("❌ File MUST have a column named **'Question'**.")
-                st.write("Found columns:", list(df.columns))
             else:
-                st.success(f"✅ Loaded {len(df)} rows. Ready to test.")
+                st.success(f"✅ Loaded {len(df)} rows.")
                 
-                if st.button(f"Run {len(df)} Tests", type="primary"):
+                if st.button(f"Run AI Test Suite", type="primary"):
                     
                     progress_bar = st.progress(0)
                     status_text = st.empty()
@@ -128,25 +146,37 @@ with tab2:
                     
                     for i, row in df.iterrows():
                         question = row['Question']
+                        u_type = row['User_Type_Final']
+                        expected = row['Expected_Final']
                         
-                        # Handle potential missing User Type column
-                        u_type = row['User Type'] if 'User Type' in df.columns else global_user_type
+                        # Handle NaN
+                        if pd.isna(expected): expected = None
+                        if pd.isna(u_type): u_type = global_user_type
                         
-                        # Handle Expected Response for comparison
-                        expected = row['Response'] if 'Response' in df.columns else "N/A"
+                        status_text.text(f"Testing {i+1}/{len(df)}...")
                         
-                        status_text.text(f"Testing {i+1}/{len(df)}: {str(question)[:30]}...")
-                        
-                        # API Call
+                        # Call API
                         api_res = call_bot_safe(question, u_type)
+                        actual = api_res["Actual Answer"]
+                        
+                        # --- AI SCORING ---
+                        similarity_score = 0.0
+                        if expected and api_res["Status"] == "PASS":
+                            # Compare Meaning
+                            emb1 = model.encode(str(expected), convert_to_tensor=True)
+                            emb2 = model.encode(str(actual), convert_to_tensor=True)
+                            similarity_score = util.pytorch_cos_sim(emb1, emb2).item() * 100
+                            similarity_score = round(similarity_score, 1)
+                        else:
+                            similarity_score = None
                         
                         results.append({
-                            "Row": i+1,
-                            "User Type": u_type if not pd.isna(u_type) else global_user_type,
+                            "ID": i+1,
+                            "User Type": u_type,
                             "Question": question,
-                            "Expected Response": expected,  # Added this column!
-                            "Actual Answer": api_res["Actual Answer"],
-                            "Source": api_res["Source"],
+                            "Expected": expected,
+                            "Actual": actual,
+                            "Accuracy (%)": similarity_score, # AI Score
                             "Latency": api_res["Time(s)"],
                             "Status": api_res["Status"]
                         })
@@ -154,22 +184,37 @@ with tab2:
                         progress_bar.progress((i + 1) / len(df))
                     
                     status_text.text("✅ Testing Complete!")
-                    
-                    # Create Result DF
                     result_df = pd.DataFrame(results)
                     
-                    # Interactive Table
+                    # METRICS
+                    c1, c2, c3 = st.columns(3)
+                    pass_rate = len(result_df[result_df["Status"]=="PASS"]) / len(result_df) * 100
+                    c1.metric("System Stability", f"{pass_rate:.1f}%")
+                    
+                    # Avg AI Score (ignoring N/A)
+                    scored_df = result_df.dropna(subset=["Accuracy (%)"])
+                    if not scored_df.empty:
+                        avg_acc = scored_df["Accuracy (%)"].mean()
+                        c2.metric("🧠 Semantic Accuracy", f"{avg_acc:.1f}%")
+                    
+                    avg_lat = result_df["Latency"].mean()
+                    c3.metric("Avg Latency", f"{avg_lat:.2f}s")
+
+                    # COLOR CODING
+                    def color_code(val):
+                        if pd.isna(val): return ''
+                        if val >= 85: return 'background-color: #c8e6c9' # Green (Excellent)
+                        if val >= 65: return 'background-color: #fff9c4' # Yellow (Okay)
+                        return 'background-color: #ffcdd2' # Red (Bad)
+
                     st.dataframe(
-                        result_df.style.apply(
-                            lambda x: ['background-color: #ffcdd2' if v == 'FAIL' or v == 'CRASH' else '' for v in x], 
-                            axis=1
-                        ), 
+                        result_df.style.map(color_code, subset=['Accuracy (%)']), 
                         use_container_width=True
                     )
                     
-                    # Download
+                    # DOWNLOAD
                     csv_data = result_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download Comparison Report", csv_data, "faq_test_results.csv", "text/csv")
+                    st.download_button("Download Report", csv_data, "test_report.csv", "text/csv")
 
         except Exception as e:
-            st.error(f"Error reading file: {e}")
+            st.error(f"Error processing file: {e}")
