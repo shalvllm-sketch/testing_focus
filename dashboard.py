@@ -19,7 +19,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-DEFAULT_MCP_URL = "https://corp-wap-weu-uat-tas-scout-02-h0fmgaf5achmfkb0.a03.azurefd.net/mcp"
+DEFAULT_MCP_URL = "https://aiworkspacetktcreation-esanfcahd6gvenf4.eastus2-01.azurewebsites.net/mcp"
 DEFAULT_API_KEY = "sk-faq-x9Km2pLqR7vNwT4eJdYc8BhA3uZsGfX1"
 DEFAULT_OHR     = "703324710"
 REQUEST_TIMEOUT = 120
