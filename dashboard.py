@@ -1,555 +1,367 @@
-import streamlit as st
-import requests
-import pandas as pd
+"""
+MCP Chat UI — Streamlit test harness for the Universal Bot V2 MCP endpoint.
+Talks to MCP over Streamable HTTP + SSE, renders the returned agent HTML
+(the "text" field from work_agent's JSON response) so you can see dropdowns,
+forms, and layouts exactly as they'd appear in the real UI.
+
+Usage:
+    pip install streamlit requests urllib3
+    streamlit run mcp_chat.py
+"""
+
+import json
 import time
-import io
-from sentence_transformers import SentenceTransformer, util
+import uuid
+from typing import Optional, Tuple
 
-# --- CONFIGURATION ---
-API_URL = "https://functional-h3cjbjeeenhfapcx.canadacentral-01.azurewebsites.net/focus/faq"
-API_KEY = "GN^CBB4185E5BFDAEDF7B1F172EE5F21"
+import requests
+import streamlit as st
+import urllib3
 
-st.set_page_config(page_title="Focus 2026 QA Dashboard", layout="wide", page_icon="🧪")
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- LOAD AI MODEL (Cached) ---
-@st.cache_resource
-def load_semantic_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+# ── Configuration ─────────────────────────────────────────────────────────────
+DEFAULT_MCP_URL = "https://corp-wap-weu-uat-tas-scout-02-h0fmgaf5achmfkb0.a03.azurefd.net/mcp"
+DEFAULT_API_KEY = "sk-faq-x9Km2pLqR7vNwT4eJdYc8BhA3uZsGfX1"
+DEFAULT_OHR     = "703324710"
+# ──────────────────────────────────────────────────────────────────────────────
 
-# --- HELPER: API CALL ---
-def call_bot_safe(query, u_type, vertical="", unit="", company="Genpact"):
-    # Fallback if User Type is missing
-    if pd.isna(u_type) or str(u_type).strip() == "":
-        u_type = "Employee"
-        
-    headers = {"Content-Type": "application/json", "X-API-KEY": API_KEY}
-    payload = {
-        "query": str(query),
-        "user_type": u_type,
-        "vertical": vertical,
-        "unit": unit,
-        "company": company
+
+def build_headers(api_key: str, session_id: Optional[str] = None) -> dict:
+    h = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "x-api-key": api_key,
     }
-    
-    try:
-        start_time = time.time()
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
-        duration = round(time.time() - start_time, 2)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                "Actual Answer": data.get("answer", "No Answer Field"),
-                "Source": data.get("sources", [{}])[0].get("source", "AI") if data.get("sources") else "AI",
-                "Time(s)": duration,
-                "Status": "PASS"
-            }
-        else:
-            return {
-                "Actual Answer": f"API Error: {response.status_code}",
-                "Source": "N/A",
-                "Time(s)": duration,
-                "Status": "FAIL"
-            }
-    except Exception as e:
-        return {
-            "Actual Answer": f"Exception: {str(e)}",
-            "Source": "Error",
-            "Time(s)": 0,
-            "Status": "CRASH"
-        }
+    if session_id:
+        h["mcp-session-id"] = session_id
+    return h
 
-# --- HELPER: TEST ENGINE (Reused for File & Paste) ---
-def run_test_suite(df, model):
-    lifecycle = st.info("🟡 Initializing Test Engine...")
-    progress_bar = st.progress(0)
-    
-    # Live Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    pass_box = m1.metric("PASS", 0)
-    fail_box = m2.metric("FAIL", 0)
-    avg_lat_box = m3.metric("Avg Latency", "0.00s")
-    avg_acc_box = m4.metric("Avg Accuracy", "N/A")
-    
-    results = []
-    latencies = []
-    accuracies = []
-    pass_cnt = 0
-    fail_cnt = 0
-    
-    # Container for the "Live Feed" of chats
-    st.markdown("### 📡 Live Execution Feed")
-    live_feed = st.container()
 
-    lifecycle.info("🟠 Running tests... Please wait.")
-    
-    for i, row in df.iterrows():
-        question = row.get('Question')
-        u_type = row.get('User Type', 'Employee')
-        expected = row.get('Response', None) # Handle 'Response' or 'Expected Answer' column mapping before calling this
-        
-        # Skip empty rows
-        if pd.isna(question) or str(question).strip() == "":
+def parse_sse_response(raw_text: str) -> str:
+    """
+    Parse SSE-formatted response. Return joined text content.
+    Lines: 'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"..."}]}}'
+    """
+    collected = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
             continue
-
-        # API Call
-        api_res = call_bot_safe(question, u_type)
-        actual = api_res["Actual Answer"]
-        
-        # AI Scoring
-        similarity_score = None
-        if expected and not pd.isna(expected) and api_res["Status"] == "PASS":
-            emb1 = model.encode(str(expected), convert_to_tensor=True)
-            emb2 = model.encode(str(actual), convert_to_tensor=True)
-            similarity_score = round(util.pytorch_cos_sim(emb1, emb2).item() * 100, 1)
-            accuracies.append(similarity_score)
-            
-        latencies.append(api_res["Time(s)"])
-        
-        if api_res["Status"] == "PASS":
-            pass_cnt += 1
-        else:
-            fail_cnt += 1
-            
-        # Update Metrics
-        pass_box.metric("PASS", pass_cnt)
-        fail_box.metric("FAIL", fail_cnt)
-        avg_lat_box.metric("Avg Latency", f"{sum(latencies)/len(latencies):.2f}s")
-        if accuracies:
-            avg_acc_box.metric("Avg Accuracy", f"{sum(accuracies)/len(accuracies):.1f}%")
-
-        # Update Live Feed
-        with live_feed:
-            with st.expander(f"#{i+1}: {question[:50]}... ({api_res['Status']})", expanded=False):
-                c1, c2 = st.columns(2)
-                c1.markdown("**Expected:**")
-                c1.info(expected if expected else "N/A")
-                c2.markdown("**Actual:**")
-                c2.success(actual) if api_res['Status'] == 'PASS' else c2.error(actual)
-                st.caption(f"Latency: {api_res['Time(s)']}s | Similarity: {similarity_score}%")
-
-        results.append({
-            "ID": i+1,
-            "User Type": u_type,
-            "Question": question,
-            "Expected": expected,
-            "Actual": actual,
-            "Accuracy (%)": similarity_score,
-            "Latency": api_res["Time(s)"],
-            "Status": api_res["Status"]
-        })
-        
-        progress_bar.progress((i + 1) / len(df))
-        
-    lifecycle.success("🟢 Testing Complete!")
-    return pd.DataFrame(results)
-
-# --- MAIN UI ---
-st.warning("⚠️ **INTERNAL TESTING ONLY**: This dashboard does not store sensitive client data. It is designed purely for functional API verification.")
-st.title("🧪 Focus 2026 API QA Suite")
-
-# Sidebar
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    with st.spinner("Loading AI Judge..."):
-        model = load_semantic_model()
-    st.success("✅ AI Judge Ready")
-    
-    st.divider()
-    global_user_type = st.selectbox("Default User Type", ["Employee", "Client"])
-    vertical = st.text_input("Vertical", "")
-    unit = st.text_input("Unit", "")
-    company = st.text_input("Company", "Genpact")
-
-# Tabs
-tab1, tab2, tab3 = st.tabs(["📝 Single Query", "📂 File Upload Test", "📋 Clipboard Paste Test"])
-
-# --- TAB 1: MANUAL ---
-with tab1:
-    st.markdown("#### Quick Check")
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        q = st.text_input("Ask a question:", placeholder="e.g. Who is the Kolkata rep?")
-    with col2:
-        st.write("") 
-        st.write("") 
-        btn = st.button("Send Query", type="primary")
-
-    if btn and q:
-        with st.spinner("Thinking..."):
-            res = call_bot_safe(q, global_user_type, vertical, unit, company)
-            if res["Status"] == "PASS":
-                st.success(f"Response ({res['Time(s)']}s)")
-                st.markdown(f"**🤖 Answer:** {res['Actual Answer']}")
-                with st.expander("Debug Info"):
-                    st.json(res)
-            else:
-                st.error(f"Failed: {res['Actual Answer']}")
-
-# --- TAB 2: FILE UPLOAD ---
-with tab2:
-    st.markdown("#### Bulk Test via File")
-    st.info("Supported: `.csv` or `.xlsx`. Columns needed: `Question`, `Response` (optional), `User Type` (optional).")
-    
-    uploaded_file = st.file_uploader("Upload Variations File", type=["csv", "xlsx"])
-    
-    if uploaded_file:
+        payload_str = line[len("data:"):].strip()
+        if not payload_str or payload_str == "[DONE]":
+            continue
         try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
-            # Normalize Headers
-            df.columns = df.columns.str.strip()
-            
-            # Standardize Column Names
-            col_map = {
-                'Expected Answer': 'Response', 
-                'User_type': 'User Type',
-                'User_Type': 'User Type'
-            }
-            df = df.rename(columns=col_map)
-            
-            if "Question" not in df.columns:
-                st.error("❌ File must have a 'Question' column.")
-            else:
-                st.write(f"Preview ({len(df)} rows):")
-                st.dataframe(df.head(3), hide_index=True)
-                
-                if st.button("🚀 Run File Test"):
-                    result_df = run_test_suite(df, model)
-                    
-                    # Display Results
-                    st.divider()
-                    st.markdown("### 📊 Final Report")
-                    
-                    def color_code(val):
-                        if pd.isna(val): return ''
-                        if val >= 85: return 'background-color: #c8e6c9' # Green
-                        if val >= 65: return 'background-color: #fff9c4' # Yellow
-                        return 'background-color: #ffcdd2' # Red
+            data = json.loads(payload_str)
+        except json.JSONDecodeError:
+            continue
+        content = data.get("result", {}).get("content", [])
+        for block in content:
+            if block.get("type") == "text" and block.get("text"):
+                collected.append(block["text"].strip())
+        if "error" in data:
+            collected.append(f"SERVER ERROR: {data['error'].get('message', str(data['error']))}")
+    return "\n".join(collected).strip() if collected else raw_text.strip()
 
-                    st.dataframe(result_df.style.map(color_code, subset=['Accuracy (%)']), use_container_width=True)
-                    
-                    csv = result_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("⬇️ Download Report", csv, "test_report_file.csv", "text/csv")
-                    
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
 
-# --- TAB 3: CLIPBOARD PASTE ---
-with tab3:
-    st.markdown("#### Paste from Excel")
-    st.markdown("Copy columns from Excel (`Question`, `Response`, `User Type`) and paste below. **Do not include headers in the paste if you want to use auto-mapping, or ensure the order is Question -> Response -> User Type**.")
-    
-    raw_text = st.text_area("Paste Data Here:", height=200, placeholder="Who is the rep?\tJohn Doe\tClient\nWhere is the hotel?\tHyatt\tEmployee")
-    
-    if st.button("🚀 Run Paste Test"):
-        if raw_text.strip():
-            try:
-                # 1. Parse the pasted text
-                # We assume tab-separated (standard Excel copy)
-                data_io = io.StringIO(raw_text)
-                
-                # Try reading with headers first, if it fails validation, try headerless
-                try:
-                    df_paste = pd.read_csv(data_io, sep="\t", header=None)
-                except:
-                    st.error("Could not parse data. Ensure it is copied from Excel (Tab separated).")
-                    st.stop()
+def initialize_mcp_session(mcp_url: str, api_key: str) -> str:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "init-1",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "mcp-streamlit-ui", "version": "1.0"},
+        },
+    }
+    resp = requests.post(
+        mcp_url, json=payload,
+        headers=build_headers(api_key),
+        timeout=30, verify=False,
+    )
+    resp.raise_for_status()
+    session_id = resp.headers.get("mcp-session-id") or resp.headers.get("x-session-id")
+    if not session_id:
+        raise RuntimeError(f"No session ID returned. Headers: {dict(resp.headers)}")
+    return session_id
 
-                # 2. Map Columns based on count
-                # Logic: Col 0 is always Question. Col 1 is Answer (opt). Col 2 is User Type (opt).
-                num_cols = len(df_paste.columns)
-                new_cols = {}
-                
-                new_cols[0] = "Question"
-                if num_cols > 1: new_cols[1] = "Response"
-                if num_cols > 2: new_cols[2] = "User Type"
-                
-                df_paste = df_paste.rename(columns=new_cols)
-                
-                st.success(f"Parsed {len(df_paste)} rows.")
-                st.dataframe(df_paste.head(), hide_index=True)
-                
-                # 3. Run Test
-                result_df = run_test_suite(df_paste, model)
-                
-                # 4. Results
-                st.divider()
-                st.markdown("### 📊 Final Report")
-                
-                def color_code(val):
-                    if pd.isna(val): return ''
-                    if val >= 85: return 'background-color: #c8e6c9'
-                    if val >= 65: return 'background-color: #fff9c4'
-                    return 'background-color: #ffcdd2'
 
-                st.dataframe(result_df.style.map(color_code, subset=['Accuracy (%)']), use_container_width=True)
-                
-                csv = result_df.to_csv(index=False).encode('utf-8')
-                st.download_button("⬇️ Download Report", csv, "test_report_paste.csv", "text/csv")
-                
-            except Exception as e:
-                st.error(f"Error parsing data: {e}")
+def call_work_agent(
+    mcp_url: str,
+    api_key: str,
+    session_id: str,
+    ohr: str,
+    query: str,
+    new_session: bool = False,
+) -> Tuple[dict, float]:
+    """
+    Call MCP's work_agent tool. Return (parsed_response_dict, elapsed_seconds).
+    parsed_response_dict = {"text": "<html>", "agent_name": "...", "country_name": "..."}
+    On error, returns {"text": "<error>", "agent_name": "", "country_name": ""}.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": f"req-{int(time.time() * 1000)}",
+        "method": "tools/call",
+        "params": {
+            "name": "work_agent",
+            "arguments": {
+                "ohr": ohr,
+                "query": query,
+                "new_session": new_session,
+            },
+        },
+    }
+    start = time.perf_counter()
+    try:
+        resp = requests.post(
+            mcp_url, json=payload,
+            headers=build_headers(api_key, session_id),
+            timeout=120, verify=False,
+        )
+        elapsed = round(time.perf_counter() - start, 2)
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("Content-Type", "")
+        raw = resp.text.strip()
+
+        if "text/event-stream" in content_type or raw.startswith("data:") or raw.startswith("event:"):
+            inner_text = parse_sse_response(raw)
+        elif raw:
+            data = resp.json()
+            content_blocks = data.get("result", {}).get("content", [])
+            inner_text = "\n".join(b.get("text", "") for b in content_blocks if b.get("type") == "text").strip()
         else:
-            st.warning("Please paste some data first.")
+            inner_text = ""
+
+        # work_agent returns a JSON string as the "text" field
+        try:
+            parsed = json.loads(inner_text)
+            if not isinstance(parsed, dict):
+                parsed = {"text": str(parsed), "agent_name": "", "country_name": ""}
+        except (json.JSONDecodeError, TypeError):
+            parsed = {"text": inner_text or "[empty response]", "agent_name": "", "country_name": ""}
+
+        return parsed, elapsed
+
+    except requests.exceptions.Timeout:
+        elapsed = round(time.perf_counter() - start, 2)
+        return {"text": "ERROR: Request timed out.", "agent_name": "", "country_name": ""}, elapsed
+    except requests.exceptions.HTTPError as e:
+        elapsed = round(time.perf_counter() - start, 2)
+        return {
+            "text": f"ERROR: HTTP {e.response.status_code} — {e.response.text[:400]}",
+            "agent_name": "", "country_name": "",
+        }, elapsed
+    except Exception as e:
+        elapsed = round(time.perf_counter() - start, 2)
+        return {"text": f"ERROR: {e}", "agent_name": "", "country_name": ""}, elapsed
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STREAMLIT UI
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.set_page_config(page_title="MCP Chat Tester", page_icon="💬", layout="wide")
+
+# ── Session state ─────────────────────────────────────────────────────────────
+if "messages" not in st.session_state:
+    st.session_state.messages = []  # list of {"role": "user|assistant", "content": str, "meta": {}}
+if "mcp_session_id" not in st.session_state:
+    st.session_state.mcp_session_id = None
+if "next_new_session" not in st.session_state:
+    st.session_state.next_new_session = False
+if "config" not in st.session_state:
+    st.session_state.config = {
+        "mcp_url": DEFAULT_MCP_URL,
+        "api_key": DEFAULT_API_KEY,
+        "ohr": DEFAULT_OHR,
+    }
 
 
-# import streamlit as st
-# import requests
-# import pandas as pd
-# import time
-# from sentence_transformers import SentenceTransformer, util
+# ── Sidebar: config + controls ────────────────────────────────────────────────
+with st.sidebar:
+    st.title("⚙️ Config")
+    st.session_state.config["mcp_url"] = st.text_input("MCP URL", st.session_state.config["mcp_url"])
+    st.session_state.config["api_key"] = st.text_input("API Key", st.session_state.config["api_key"], type="password")
+    st.session_state.config["ohr"] = st.text_input("OHR", st.session_state.config["ohr"])
 
-# # --- CONFIGURATION ---
-# API_URL = "https://functional-h3cjbjeeenhfapcx.canadacentral-01.azurewebsites.net/focus/faq"
-# API_KEY = "GN^CBB4185E5BFDAEDF7B1F172EE5F21"
+    st.divider()
 
-# st.set_page_config(page_title="Focus 2026 QA Dashboard", layout="wide", page_icon="🧪")
+    st.subheader("Session")
+    if st.session_state.mcp_session_id:
+        st.success(f"Connected\n\nID: `{st.session_state.mcp_session_id[:20]}...`")
+    else:
+        st.warning("Not connected")
 
-# # --- LOAD AI MODEL (Cached) ---
-# @st.cache_resource
-# def load_semantic_model():
-#     return SentenceTransformer('all-MiniLM-L6-v2')
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔌 Init", use_container_width=True):
+            try:
+                with st.spinner("Initializing..."):
+                    sid = initialize_mcp_session(
+                        st.session_state.config["mcp_url"],
+                        st.session_state.config["api_key"],
+                    )
+                    st.session_state.mcp_session_id = sid
+                st.rerun()
+            except Exception as e:
+                st.error(f"Init failed: {e}")
 
-# st.title("🧪 Focus 2026 API QA Suite")
-# st.markdown("Upload your **Variations File**. The system auto-detects `Question`, `Response`, and `User Type`.")
+    with col2:
+        if st.button("🔄 Reset", use_container_width=True):
+            st.session_state.next_new_session = True
+            st.session_state.messages.append({
+                "role": "system",
+                "content": "— Session reset triggered. Next message will start fresh. —",
+                "meta": {},
+            })
+            st.rerun()
 
-# # --- SIDEBAR ---
-# with st.sidebar:
-#     st.header("⚙️ Configuration")
-#     global_user_type = st.selectbox("Fallback User Type", ["Employee", "Client"])
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
-#     st.divider()
-#     with st.spinner("Loading AI Judge..."):
-#         model = load_semantic_model()
-#     st.success("✅ AI Judge Ready")
+    st.divider()
 
-#     with st.expander("Advanced Params", expanded=False):
-#         vertical = st.text_input("Vertical", "")
-#         unit = st.text_input("Unit", "")
-#         company = st.text_input("Company", "Genpact")
+    st.subheader("View Options")
+    render_mode = st.radio(
+        "How to render agent response",
+        ["Rendered HTML (see dropdowns/forms)", "Raw HTML source", "Both side-by-side"],
+        index=0,
+    )
+    show_meta = st.checkbox("Show agent_name / country / latency", value=True)
 
-# # --- API FUNCTION (UNCHANGED) ---
-# def call_bot_safe(query, u_type):
-#     if pd.isna(u_type) or str(u_type).strip() == "":
-#         u_type = global_user_type
+    st.divider()
 
-#     headers = {"Content-Type": "application/json", "X-API-KEY": API_KEY}
-#     payload = {
-#         "query": str(query),
-#         "user_type": u_type,
-#         "vertical": vertical,
-#         "unit": unit,
-#         "company": company
-#     }
+    st.caption(f"Total messages: {len(st.session_state.messages)}")
 
-#     try:
-#         start_time = time.time()
-#         response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
-#         duration = round(time.time() - start_time, 2)
 
-#         if response.status_code == 200:
-#             data = response.json()
-#             return {
-#                 "Actual Answer": data.get("answer", "No Answer Field"),
-#                 "Source": data.get("sources", [{}])[0].get("source", "AI") if data.get("sources") else "AI",
-#                 "Time(s)": duration,
-#                 "Status": "PASS"
-#             }
-#         else:
-#             return {
-#                 "Actual Answer": f"API Error: {response.status_code}",
-#                 "Source": "N/A",
-#                 "Time(s)": duration,
-#                 "Status": "FAIL"
-#             }
-#     except Exception as e:
-#         return {
-#             "Actual Answer": f"Exception: {str(e)}",
-#             "Source": "Error",
-#             "Time(s)": 0,
-#             "Status": "CRASH"
-#         }
+# ── Main area ─────────────────────────────────────────────────────────────────
+st.title("💬 MCP Chat Tester")
+st.caption("Test the Universal Bot V2 MCP endpoint. Type a message below to see how the UI would render.")
 
-# # --- UI TABS ---
-# tab1, tab2 = st.tabs(["📝 Manual Check", "🚀 Bulk Variations Test"])
+if not st.session_state.mcp_session_id:
+    st.info("👈 Click **Init** in the sidebar to connect to MCP before chatting.")
 
-# # --- TAB 1: MANUAL ---
-# with tab1:
-#     col1, col2 = st.columns([4, 1])
-#     with col1:
-#         q = st.text_input("Ask a question:", placeholder="e.g. Who is the Kolkata rep?")
-#     with col2:
-#         st.write("")
-#         st.write("")
-#         if st.button("Send", type="primary"):
-#             with st.spinner("Thinking..."):
-#                 res = call_bot_safe(q, global_user_type)
-#                 if res["Status"] == "PASS":
-#                     st.success(f"Response ({res['Time(s)']}s)")
-#                     st.markdown(f"**🤖 Answer:** {res['Actual Answer']}")
-#                 else:
-#                     st.error(f"Failed: {res['Actual Answer']}")
+# ── Render chat history ───────────────────────────────────────────────────────
+for msg in st.session_state.messages:
+    role = msg["role"]
 
-# # --- TAB 2: BULK TEST ---
-# with tab2:
-#     st.subheader("Upload Test File")
-#     st.info("Required Columns: `Question`, `Response`, `User Type`.")
+    if role == "system":
+        st.info(msg["content"])
+        continue
 
-#     uploaded_file = st.file_uploader("Choose file", type=["csv", "xlsx"])
+    with st.chat_message(role):
+        if role == "user":
+            st.write(msg["content"])
+        else:
+            meta = msg.get("meta", {})
 
-#     if uploaded_file is not None:
-#         try:
-#             if uploaded_file.name.endswith('.csv'):
-#                 df = pd.read_csv(uploaded_file)
-#             else:
-#                 df = pd.read_excel(uploaded_file)
+            if show_meta:
+                badges = []
+                if meta.get("agent_name"):
+                    badges.append(f"🎯 **{meta['agent_name']}**")
+                if meta.get("country_name"):
+                    badges.append(f"🌍 {meta['country_name']}")
+                if meta.get("elapsed") is not None:
+                    badges.append(f"⏱️ {meta['elapsed']}s")
+                if badges:
+                    st.caption(" · ".join(badges))
 
-#             df.columns = df.columns.str.strip()
+            content = msg["content"]
 
-#             if 'User Type' in df.columns:
-#                 df['run_user_type'] = df['User Type']
-#             elif 'User_type' in df.columns:
-#                 df['run_user_type'] = df['User_type']
-#             else:
-#                 df['run_user_type'] = global_user_type
+            if render_mode.startswith("Rendered"):
+                # Render the HTML directly so dropdowns, forms, etc. show up
+                st.components.v1.html(
+                    _wrap_for_render(content),
+                    height=_estimate_height(content),
+                    scrolling=True,
+                )
+            elif render_mode.startswith("Raw"):
+                st.code(content, language="html")
+            else:  # Both side-by-side
+                left, right = st.columns([1, 1])
+                with left:
+                    st.markdown("**Rendered:**")
+                    st.components.v1.html(
+                        _wrap_for_render(content),
+                        height=_estimate_height(content),
+                        scrolling=True,
+                    )
+                with right:
+                    st.markdown("**Raw HTML:**")
+                    st.code(content, language="html")
 
-#             if 'Response' in df.columns:
-#                 df['expected_answer'] = df['Response']
-#             elif 'Expected Answer' in df.columns:
-#                 df['expected_answer'] = df['Expected Answer']
-#             else:
-#                 df['expected_answer'] = None
+# ── Chat input ────────────────────────────────────────────────────────────────
+def _wrap_for_render(html_content: str) -> str:
+    """Wrap the fragment in a minimal HTML doc so it renders cleanly in the iframe."""
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {{
+  margin: 0;
+  padding: 12px;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #ffffff;
+  color: #1e293b;
+}}
+</style>
+</head>
+<body>
+{html_content}
+</body>
+</html>"""
 
-#             if "Question" not in df.columns:
-#                 st.error("❌ File MUST have a column named **'Question'**.")
-#             else:
-#                 st.success(f"✅ Loaded {len(df)} rows.")
 
-#                 if st.button("Run AI Test Suite", type="primary"):
+def _estimate_height(html_content: str) -> int:
+    """
+    Estimate iframe height so long forms don't get cut off.
+    Rough: 20px per line + extra for form controls.
+    """
+    line_count = html_content.count("\n") + 1
+    form_bonus = html_content.count("<select") * 30 + html_content.count("<input") * 30
+    fieldset_bonus = html_content.count("<fieldset") * 40
+    estimate = max(300, line_count * 18 + form_bonus + fieldset_bonus + 100)
+    return min(estimate, 2000)  # cap at 2000px
 
-#                     lifecycle = st.info("🟡 Preparing test run...")
-#                     progress = st.progress(0)
 
-#                     m1, m2, m3, m4 = st.columns(4)
-#                     pass_box = m1.metric("PASS", 0)
-#                     fail_box = m2.metric("FAIL", 0)
-#                     avg_lat_box = m3.metric("Avg Latency", "0.00s")
-#                     avg_acc_box = m4.metric("Avg Accuracy", "N/A")
+# Streamlit's chat_input goes at the bottom automatically
+user_query = st.chat_input("Type your message...", disabled=(st.session_state.mcp_session_id is None))
 
-#                     live_feed = st.container()
-#                     results = []
+if user_query:
+    # Append user message immediately
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_query,
+        "meta": {},
+    })
 
-#                     pass_cnt = fail_cnt = 0
-#                     latencies = []
-#                     accuracies = []
+    # Call MCP
+    new_session_flag = st.session_state.next_new_session
+    st.session_state.next_new_session = False  # consume the flag
 
-#                     lifecycle.info("🟠 Running tests...")
+    with st.spinner("Waiting for agent response..."):
+        parsed, elapsed = call_work_agent(
+            mcp_url=st.session_state.config["mcp_url"],
+            api_key=st.session_state.config["api_key"],
+            session_id=st.session_state.mcp_session_id,
+            ohr=st.session_state.config["ohr"],
+            query=user_query,
+            new_session=new_session_flag,
+        )
 
-#                     for i, row in df.iterrows():
-#                         question = row['Question']
-#                         u_type = row['run_user_type']
-#                         expected = row['expected_answer']
-#                         is_var = row.get('Is_variation', 'N/A')
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": parsed.get("text", ""),
+        "meta": {
+            "agent_name": parsed.get("agent_name", ""),
+            "country_name": parsed.get("country_name", ""),
+            "elapsed": elapsed,
+        },
+    })
 
-#                         if pd.isna(expected): expected = None
-#                         if pd.isna(u_type): u_type = global_user_type
-
-#                         api_res = call_bot_safe(question, u_type)
-#                         actual = api_res["Actual Answer"]
-
-#                         similarity_score = None
-#                         if expected and api_res["Status"] == "PASS":
-#                             emb1 = model.encode(str(expected), convert_to_tensor=True)
-#                             emb2 = model.encode(str(actual), convert_to_tensor=True)
-#                             similarity_score = round(
-#                                 util.pytorch_cos_sim(emb1, emb2).item() * 100, 1
-#                             )
-#                             accuracies.append(similarity_score)
-
-#                         latencies.append(api_res["Time(s)"])
-
-#                         if api_res["Status"] == "PASS":
-#                             pass_cnt += 1
-#                         else:
-#                             fail_cnt += 1
-
-#                         pass_box.metric("PASS", pass_cnt)
-#                         fail_box.metric("FAIL", fail_cnt)
-#                         avg_lat_box.metric("Avg Latency", f"{sum(latencies)/len(latencies):.2f}s")
-#                         avg_acc_box.metric(
-#                             "Avg Accuracy",
-#                             f"{sum(accuracies)/len(accuracies):.1f}%" if accuracies else "N/A"
-#                         )
-
-#                         # 🔴 FULL REAL-TIME COMPARISON VIEW
-#                         with live_feed:
-#                             with st.expander(
-#                                 f"🔎 Test {i+1} | {api_res['Status']} | {api_res['Time(s)']}s",
-#                                 expanded=True
-#                             ):
-#                                 st.markdown("**🟦 Question**")
-#                                 st.write(question)
-
-#                                 colA, colB = st.columns(2)
-
-#                                 with colA:
-#                                     st.markdown("**📘 Expected Response**")
-#                                     st.write(expected if expected else "—")
-
-#                                 with colB:
-#                                     st.markdown("**🤖 Actual Answer**")
-#                                     st.write(actual)
-
-#                                 c1, c2, c3 = st.columns(3)
-#                                 c1.metric("Status", api_res["Status"])
-#                                 c2.metric("Latency (s)", api_res["Time(s)"])
-#                                 c3.metric(
-#                                     "Semantic Score",
-#                                     f"{similarity_score}%" if similarity_score is not None else "N/A"
-#                                 )
-
-#                         results.append({
-#                             "ID": i+1,
-#                             "User Type": u_type,
-#                             "Is Variation": is_var,
-#                             "Question": question,
-#                             "Expected": expected,
-#                             "Actual": actual,
-#                             "Accuracy (%)": similarity_score,
-#                             "Latency": api_res["Time(s)"],
-#                             "Status": api_res["Status"]
-#                         })
-
-#                         progress.progress((i + 1) / len(df))
-
-#                     lifecycle.success("🟢 Testing complete!")
-
-#                     result_df = pd.DataFrame(results)
-
-#                     def color_code(val):
-#                         if pd.isna(val): return ''
-#                         if val >= 85: return 'background-color: #c8e6c9'
-#                         if val >= 65: return 'background-color: #fff9c4'
-#                         return 'background-color: #ffcdd2'
-
-#                     st.dataframe(
-#                         result_df.style.map(color_code, subset=['Accuracy (%)']),
-#                         use_container_width=True
-#                     )
-
-#                     csv_data = result_df.to_csv(index=False).encode('utf-8')
-#                     st.download_button(
-#                         "⬇️ Download Test Report",
-#                         csv_data,
-#                         "test_report.csv",
-#                         "text/csv"
-#                     )
-
-#         except Exception as e:
-#             st.error(f"Error processing file: {e}")
+    st.rerun()
