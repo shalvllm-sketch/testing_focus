@@ -7,13 +7,14 @@ Usage:
 """
 
 import json
+import re
 import time
+from html.parser import HTMLParser
 from typing import Optional, Tuple
 
 import requests
 import streamlit as st
 import urllib3
-from streamlit_js_eval import streamlit_js_eval
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -26,7 +27,7 @@ REQUEST_TIMEOUT = 120
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MCP HELPERS (unchanged)
+# MCP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_headers(api_key, session_id=None):
@@ -116,101 +117,133 @@ def call_work_agent(mcp_url, api_key, session_id, ohr, query, new_session=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HTML RENDER
+# HTML PARSER — extract form fields into a Python structure
 # ══════════════════════════════════════════════════════════════════════════════
 
-def wrap_for_render(html_content, msg_id):
+class FormFieldParser(HTMLParser):
     """
-    Wrap HTML fragment. Submit button gathers values and stores them
-    in localStorage under a unique key that Python polls.
+    Extract form fields (labels, selects/options, text inputs) from MCP HTML.
+    Returns a list of dicts:
+      {"kind": "select", "label": "...", "name": "...", "options": [(label,value),...], "default": "..."}
+      {"kind": "text",   "label": "...", "name": "...", "default": "..."}
+      {"kind": "info",   "text": "..."}  ← <p class="agent-text"> content
     """
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  html, body {{
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    color: #1e293b;
-    font-size: 14px;
-  }}
-  body {{ padding: 2px 4px; }}
-</style>
-</head>
-<body>
-{html_content}
-<script>
-(function() {{
-  document.querySelectorAll('form.agent-form').forEach(function(form) {{
-    var btn = form.querySelector('button[type="submit"], button.agent-submit');
-    if (!btn) return;
-    btn.addEventListener('click', function(e) {{
-      e.preventDefault();
-      var values = [];
-      form.querySelectorAll('select, input[type="text"]').forEach(function(el) {{
-        if (el.disabled) return;
-        var v = (el.value || '').trim();
-        if (!v) return;
-        if (el.tagName === 'SELECT') {{
-          var opt = el.options[el.selectedIndex];
-          if (opt && opt.text) v = opt.text.trim();
-        }}
-        values.push(v);
-      }});
-      var combined = values.join(', ');
-      if (!combined) return;
-      // Write to top-window localStorage for Python to pick up
-      try {{
-        window.top.localStorage.setItem('mcp_form_submit', combined);
-        window.top.localStorage.setItem('mcp_form_ts', String(Date.now()));
-      }} catch(err) {{
-        window.localStorage.setItem('mcp_form_submit', combined);
-        window.localStorage.setItem('mcp_form_ts', String(Date.now()));
-      }}
-      btn.textContent = '✓ Sending...';
-      btn.disabled = true;
-      btn.style.background = '#16a34a';
-      // Force parent Streamlit page to reload so Python picks up the value
-      setTimeout(function() {{
-        try {{ window.top.location.reload(); }}
-        catch(e) {{ window.parent.location.reload(); }}
-      }}, 300);
-    }});
-  }});
-}})();
-</script>
-</body>
-</html>"""
+    def __init__(self):
+        super().__init__()
+        self.fields = []
+        self.current_label = ""
+        self.in_label = False
+        self.in_strong = False
+        self.strong_text = ""
+        self.in_select = False
+        self.current_select = None  # dict being built
+        self.in_option = False
+        self.option_value = ""
+        self.option_selected = False
+        self.option_disabled = False
+        self.option_text = ""
+        self.in_p_text = False
+        self.p_text = ""
+        self.in_input = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs_d = dict(attrs)
+        if tag == "label":
+            self.in_label = True
+            self.strong_text = ""
+        elif tag == "strong" and self.in_label:
+            self.in_strong = True
+            self.strong_text = ""
+        elif tag == "select":
+            self.in_select = True
+            self.current_select = {
+                "kind": "select",
+                "label": self.strong_text.strip() or self.current_label.strip() or "Select",
+                "name": attrs_d.get("name", f"field_{len(self.fields)}"),
+                "options": [],
+                "default": "",
+                "disabled": "disabled" in attrs_d,
+            }
+        elif tag == "option" and self.in_select:
+            self.in_option = True
+            self.option_value = attrs_d.get("value", "")
+            self.option_selected = "selected" in attrs_d
+            self.option_disabled = "disabled" in attrs_d
+            self.option_text = ""
+        elif tag == "input":
+            input_type = attrs_d.get("type", "text")
+            if input_type == "text":
+                self.fields.append({
+                    "kind": "text",
+                    "label": self.strong_text.strip() or self.current_label.strip() or "Field",
+                    "name": attrs_d.get("name", f"field_{len(self.fields)}"),
+                    "default": attrs_d.get("value", ""),
+                    "placeholder": attrs_d.get("placeholder", ""),
+                })
+        elif tag == "p":
+            if "agent-text" in attrs_d.get("class", ""):
+                self.in_p_text = True
+                self.p_text = ""
+
+    def handle_endtag(self, tag):
+        if tag == "strong":
+            self.in_strong = False
+        elif tag == "label":
+            self.in_label = False
+            self.current_label = ""
+        elif tag == "select":
+            if self.current_select:
+                if not self.current_select["disabled"]:
+                    self.fields.append(self.current_select)
+            self.current_select = None
+            self.in_select = False
+        elif tag == "option" and self.in_option:
+            if self.current_select and not self.option_disabled and self.option_value:
+                lbl = self.option_text.strip() or self.option_value
+                self.current_select["options"].append((lbl, self.option_value))
+                if self.option_selected:
+                    self.current_select["default"] = self.option_value
+            self.in_option = False
+        elif tag == "p" and self.in_p_text:
+            txt = self.p_text.strip()
+            if txt:
+                self.fields.append({"kind": "info", "text": txt})
+            self.in_p_text = False
+
+    def handle_data(self, data):
+        if self.in_strong:
+            self.strong_text += data
+        elif self.in_option:
+            self.option_text += data
+        elif self.in_p_text:
+            self.p_text += data
+        elif self.in_label and not self.in_select:
+            self.current_label += data
 
 
-def estimate_height(html_content):
-    if not html_content:
-        return 50
-    has_form = any(t in html_content for t in ("<select", "<input", "<button", "<fieldset"))
-    char_count = len(html_content)
-
-    if has_form:
-        form_bonus = (
-            html_content.count("<select") * 55 +
-            html_content.count("<input") * 45 +
-            html_content.count("<fieldset") * 60 +
-            html_content.count("<label") * 25 +
-            html_content.count("<button") * 40
-        )
-        text_lines = max(1, char_count // 110)
-        return min(max(100 + text_lines * 18 + form_bonus, 180), 2200)
-    else:
-        text_lines = max(1, char_count // 90)
-        return min(max(20 + text_lines * 20, 50), 1000)
+def parse_agent_form(html):
+    """Return a list of parsed field dicts."""
+    if not html:
+        return []
+    p = FormFieldParser()
+    try:
+        p.feed(html)
+    except Exception:
+        return []
+    return p.fields
 
 
-def has_html_tags(text):
-    if not text:
-        return False
-    return any(t in text for t in ("<form", "<select", "<input", "<button", "<div", "<label", "<fieldset"))
+def has_interactive_fields(fields):
+    return any(f["kind"] in ("select", "text") for f in fields)
+
+
+def clean_html_for_preview(html):
+    """Strip <style>, <script> from HTML for cleaner preview."""
+    if not html:
+        return ""
+    html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL)
+    html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
+    return html
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -221,34 +254,20 @@ st.set_page_config(page_title="MCP Chat Tester", page_icon="💬", layout="wide"
 
 st.markdown("""
 <style>
-  /* Tighter chat spacing */
   [data-testid="stChatMessage"] {
-    padding: 6px 10px !important;
-    margin-bottom: 4px !important;
+    padding: 8px 12px !important;
+    margin-bottom: 6px !important;
     border-radius: 12px;
   }
-  /* User bubble */
   [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
     background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%) !important;
   }
-  /* Assistant bubble */
   [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
     background: #ffffff !important;
     border: 1px solid #e2e8f0 !important;
   }
-  /* Kill excess space around iframes */
-  [data-testid="stChatMessage"] iframe {
-    display: block;
-    margin: 0 !important;
-    padding: 0 !important;
-  }
-  [data-testid="stChatMessage"] [data-testid="stCustomComponentV1"] {
-    margin: 0 !important;
-  }
-  /* Sidebar polish */
   [data-testid="stSidebar"] { background: #f8fafc; }
   .block-container { padding-top: 1.5rem; padding-bottom: 6rem; }
-  /* Badges */
   .msg-badge {
     display: inline-block;
     padding: 2px 8px;
@@ -277,34 +296,9 @@ if "next_new_session" not in st.session_state:
 if "config" not in st.session_state:
     st.session_state.config = {"mcp_url": DEFAULT_MCP_URL, "api_key": DEFAULT_API_KEY, "ohr": DEFAULT_OHR}
 if "render_mode" not in st.session_state:
-    st.session_state.render_mode = "Rendered"
+    st.session_state.render_mode = "Interactive Form"
 if "show_meta" not in st.session_state:
     st.session_state.show_meta = True
-if "last_form_ts" not in st.session_state:
-    st.session_state.last_form_ts = "0"
-
-
-# ── Poll localStorage for form submission ─────────────────────────────────────
-form_submit_val = streamlit_js_eval(
-    js_expressions="localStorage.getItem('mcp_form_submit')",
-    key="poll_submit",
-    want_output=True,
-)
-form_submit_ts = streamlit_js_eval(
-    js_expressions="localStorage.getItem('mcp_form_ts')",
-    key="poll_ts",
-    want_output=True,
-)
-
-pending_from_form = None
-if form_submit_val and form_submit_ts and form_submit_ts != st.session_state.last_form_ts:
-    pending_from_form = form_submit_val
-    st.session_state.last_form_ts = form_submit_ts
-    # Clear localStorage so this doesn't re-trigger
-    streamlit_js_eval(
-        js_expressions="localStorage.removeItem('mcp_form_submit'); localStorage.removeItem('mcp_form_ts');",
-        key="clear_ls",
-    )
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -335,7 +329,6 @@ with st.sidebar:
                 st.rerun()
             except Exception as e:
                 st.error(f"Init failed: {e}")
-
     with c2:
         if st.button("🔄 Reset", use_container_width=True):
             try:
@@ -349,7 +342,6 @@ with st.sidebar:
                 st.session_state.messages.append({
                     "role": "system",
                     "content": "Session reset. Fresh conversation starting.",
-                    "meta": {},
                 })
                 st.rerun()
             except Exception as e:
@@ -365,18 +357,18 @@ with st.sidebar:
     st.session_state.always_new_session = st.checkbox(
         "Send `new_session=True` on every message",
         value=st.session_state.always_new_session,
-        help="When ON, every request forces a fresh MCP conversation. Like re-authenticating each turn.",
     )
     if st.session_state.next_new_session:
-        st.info("🔄 Next message will use `new_session=True` (one-time)")
+        st.info("🔄 Next msg will use new_session=True")
 
     st.divider()
 
-    st.markdown("### 👁️ Display")
+    st.markdown("### 👁️ Display Mode")
     st.session_state.render_mode = st.radio(
         "Show agent replies as",
-        ["Rendered", "Raw HTML", "Both"],
-        index=["Rendered", "Raw HTML", "Both"].index(st.session_state.render_mode),
+        ["Interactive Form", "HTML Preview", "Raw HTML"],
+        index=["Interactive Form", "HTML Preview", "Raw HTML"].index(st.session_state.render_mode),
+        help="Interactive Form = native Streamlit dropdowns (recommended). HTML Preview = read-only styled preview. Raw HTML = source.",
     )
     st.session_state.show_meta = st.checkbox("Show badges", value=st.session_state.show_meta)
 
@@ -384,13 +376,44 @@ with st.sidebar:
     st.caption(f"💬 {len(st.session_state.messages)} messages")
 
 
-# ── Main area ─────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("## 💬 MCP Chat Tester")
-st.caption("Universal Bot V2 test harness. Fill form fields and click Submit — values auto-send as your next message.")
+st.caption("Universal Bot V2 test harness. Interactive Form mode gives you real dropdowns you can submit.")
 
 if not st.session_state.mcp_session_id:
     st.info("👈 Click **🔌 Init** in the sidebar to connect.")
     st.stop()
+
+
+def send_message(text, use_new_session):
+    """Add user msg, call MCP, add assistant msg."""
+    st.session_state.messages.append({
+        "role": "user",
+        "content": text,
+        "meta": {"new_session": use_new_session},
+    })
+    with st.chat_message("user", avatar="🧑"):
+        st.markdown(text)
+    with st.chat_message("assistant", avatar="🤖"):
+        with st.spinner("Agent thinking..."):
+            parsed, elapsed = call_work_agent(
+                mcp_url=st.session_state.config["mcp_url"],
+                api_key=st.session_state.config["api_key"],
+                session_id=st.session_state.mcp_session_id,
+                ohr=st.session_state.config["ohr"],
+                query=text,
+                new_session=use_new_session,
+            )
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": parsed.get("text", ""),
+        "meta": {
+            "agent_name": parsed.get("agent_name", ""),
+            "country_name": parsed.get("country_name", ""),
+            "elapsed": elapsed,
+            "new_session": use_new_session,
+        },
+    })
 
 
 # ── Render chat history ───────────────────────────────────────────────────────
@@ -404,95 +427,114 @@ for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(role, avatar="🧑" if role == "user" else "🤖"):
         if role == "user":
             st.markdown(msg["content"])
-        else:
-            meta = msg.get("meta", {})
+            continue
 
-            if st.session_state.show_meta:
-                bh = ""
-                if meta.get("agent_name"):
-                    bh += f'<span class="msg-badge badge-agent">🎯 {meta["agent_name"]}</span>'
-                if meta.get("country_name"):
-                    bh += f'<span class="msg-badge badge-country">🌍 {meta["country_name"]}</span>'
-                if meta.get("elapsed") is not None:
-                    bh += f'<span class="msg-badge badge-time">⏱️ {meta["elapsed"]}s</span>'
-                if meta.get("new_session"):
-                    bh += f'<span class="msg-badge badge-newsess">🔄 new_session</span>'
-                if bh:
-                    st.markdown(bh, unsafe_allow_html=True)
+        # assistant message
+        meta = msg.get("meta", {})
+        if st.session_state.show_meta:
+            bh = ""
+            if meta.get("agent_name"):
+                bh += f'<span class="msg-badge badge-agent">🎯 {meta["agent_name"]}</span>'
+            if meta.get("country_name"):
+                bh += f'<span class="msg-badge badge-country">🌍 {meta["country_name"]}</span>'
+            if meta.get("elapsed") is not None:
+                bh += f'<span class="msg-badge badge-time">⏱️ {meta["elapsed"]}s</span>'
+            if meta.get("new_session"):
+                bh += f'<span class="msg-badge badge-newsess">🔄 new_session</span>'
+            if bh:
+                st.markdown(bh, unsafe_allow_html=True)
 
-            content = msg["content"]
+        content = msg["content"]
+        mode = st.session_state.render_mode
 
-            if st.session_state.render_mode == "Rendered":
-                if has_html_tags(content):
-                    st.components.v1.html(
-                        wrap_for_render(content, f"msg_{i}"),
-                        height=estimate_height(content),
-                        scrolling=False,
-                    )
-                else:
-                    st.markdown(content)
-            elif st.session_state.render_mode == "Raw HTML":
-                st.code(content, language="html")
+        if mode == "Raw HTML":
+            st.code(content, language="html")
+            continue
+
+        if mode == "HTML Preview":
+            # Static preview only, no interaction
+            if "<" in content and ">" in content:
+                # Render as-is via markdown (unsafe html)
+                st.markdown(clean_html_for_preview(content), unsafe_allow_html=True)
             else:
-                left, right = st.columns(2)
-                with left:
-                    st.markdown("**Rendered:**")
-                    if has_html_tags(content):
-                        st.components.v1.html(
-                            wrap_for_render(content, f"msg_{i}"),
-                            height=estimate_height(content),
-                            scrolling=False,
-                        )
-                    else:
-                        st.markdown(content)
-                with right:
-                    st.markdown("**Raw:**")
-                    st.code(content, language="html")
+                st.markdown(content)
+            continue
+
+        # mode == "Interactive Form"
+        fields = parse_agent_form(content)
+
+        if not fields:
+            # No parseable form, just show text/HTML as-is
+            if "<" in content and ">" in content:
+                st.markdown(clean_html_for_preview(content), unsafe_allow_html=True)
+            else:
+                st.markdown(content)
+            continue
+
+        # Only the LATEST assistant message gets interactive form
+        is_latest_assistant = (i == len(st.session_state.messages) - 1)
+
+        # Info text (agent prose)
+        for f in fields:
+            if f["kind"] == "info":
+                st.markdown(f["text"])
+
+        interactive_fields = [f for f in fields if f["kind"] in ("select", "text")]
+
+        if not interactive_fields:
+            continue
+
+        if not is_latest_assistant:
+            # Show static preview for historical assistant messages
+            st.caption("*(Form from earlier turn — interact with the latest message.)*")
+            for f in interactive_fields:
+                if f["kind"] == "select":
+                    st.markdown(f"**{f['label']}** — options: {', '.join(o[0] for o in f['options'])}")
+                elif f["kind"] == "text":
+                    st.markdown(f"**{f['label']}** — [text input]")
+            continue
+
+        # Build native Streamlit widgets
+        with st.form(key=f"agent_form_{i}", clear_on_submit=False):
+            widget_vals = {}
+            for j, f in enumerate(interactive_fields):
+                widget_key = f"agent_form_{i}_field_{j}"
+                if f["kind"] == "select":
+                    opt_labels = [o[0] for o in f["options"]]
+                    if not opt_labels:
+                        continue
+                    default_idx = 0
+                    if f.get("default"):
+                        for k, (lbl, val) in enumerate(f["options"]):
+                            if val == f["default"]:
+                                default_idx = k
+                                break
+                    widget_vals[f["label"]] = st.selectbox(
+                        f["label"], opt_labels, index=default_idx, key=widget_key,
+                    )
+                elif f["kind"] == "text":
+                    widget_vals[f["label"]] = st.text_input(
+                        f["label"],
+                        value=f.get("default", ""),
+                        placeholder=f.get("placeholder", ""),
+                        key=widget_key,
+                    )
+
+            submitted = st.form_submit_button("📤 Submit", type="primary", use_container_width=False)
+            if submitted:
+                # Combine values into a comma-separated string (matches how real UI would post)
+                combined = ", ".join(str(v).strip() for v in widget_vals.values() if str(v).strip())
+                if combined:
+                    use_new = st.session_state.always_new_session or st.session_state.next_new_session
+                    st.session_state.next_new_session = False
+                    send_message(combined, use_new)
+                    st.rerun()
 
 
-# ── Chat input + form intake ──────────────────────────────────────────────────
+# ── Chat input ────────────────────────────────────────────────────────────────
 user_query = st.chat_input("Type your message...")
-
-# Form submission takes precedence
-if pending_from_form:
-    user_query = pending_from_form
-
 if user_query:
-    # Determine new_session flag
-    use_new_session = (
-        st.session_state.always_new_session or st.session_state.next_new_session
-    )
-    st.session_state.next_new_session = False  # one-time flag consumed
-
-    st.session_state.messages.append({
-        "role": "user",
-        "content": user_query,
-        "meta": {"new_session": use_new_session},
-    })
-
-    with st.chat_message("user", avatar="🧑"):
-        st.markdown(user_query)
-
-    with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner("Agent thinking..."):
-            parsed, elapsed = call_work_agent(
-                mcp_url=st.session_state.config["mcp_url"],
-                api_key=st.session_state.config["api_key"],
-                session_id=st.session_state.mcp_session_id,
-                ohr=st.session_state.config["ohr"],
-                query=user_query,
-                new_session=use_new_session,
-            )
-
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": parsed.get("text", ""),
-        "meta": {
-            "agent_name": parsed.get("agent_name", ""),
-            "country_name": parsed.get("country_name", ""),
-            "elapsed": elapsed,
-            "new_session": use_new_session,
-        },
-    })
-
+    use_new = st.session_state.always_new_session or st.session_state.next_new_session
+    st.session_state.next_new_session = False
+    send_message(user_query, use_new)
     st.rerun()
