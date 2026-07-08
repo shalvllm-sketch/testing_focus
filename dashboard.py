@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 import requests
 import streamlit as st
 import urllib3
+from streamlit_js_eval import streamlit_js_eval
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -25,21 +26,17 @@ REQUEST_TIMEOUT = 120
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MCP HELPERS
+# MCP HELPERS (unchanged)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_headers(api_key: str, session_id: Optional[str] = None) -> dict:
-    h = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "x-api-key": api_key,
-    }
+def build_headers(api_key, session_id=None):
+    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "x-api-key": api_key}
     if session_id:
         h["mcp-session-id"] = session_id
     return h
 
 
-def parse_sse_response(raw_text: str) -> str:
+def parse_sse_response(raw_text):
     collected = []
     for line in raw_text.splitlines():
         line = line.strip()
@@ -61,16 +58,11 @@ def parse_sse_response(raw_text: str) -> str:
     return "\n".join(collected).strip() if collected else raw_text.strip()
 
 
-def initialize_mcp_session(mcp_url: str, api_key: str) -> str:
+def initialize_mcp_session(mcp_url, api_key):
     payload = {
-        "jsonrpc": "2.0",
-        "id": "init-1",
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "mcp-streamlit-ui", "version": "1.0"},
-        },
+        "jsonrpc": "2.0", "id": "init-1", "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "mcp-streamlit-ui", "version": "1.0"}},
     }
     resp = requests.post(mcp_url, json=payload, headers=build_headers(api_key), timeout=30, verify=False)
     resp.raise_for_status()
@@ -80,15 +72,12 @@ def initialize_mcp_session(mcp_url: str, api_key: str) -> str:
     return session_id
 
 
-def call_work_agent(mcp_url, api_key, session_id, ohr, query, new_session=False) -> Tuple[dict, float]:
+def call_work_agent(mcp_url, api_key, session_id, ohr, query, new_session=False):
     payload = {
-        "jsonrpc": "2.0",
-        "id": f"req-{int(time.time() * 1000)}",
+        "jsonrpc": "2.0", "id": f"req-{int(time.time() * 1000)}",
         "method": "tools/call",
-        "params": {
-            "name": "work_agent",
-            "arguments": {"ohr": ohr, "query": query, "new_session": new_session},
-        },
+        "params": {"name": "work_agent",
+                   "arguments": {"ohr": ohr, "query": query, "new_session": new_session}},
     }
     start = time.perf_counter()
     try:
@@ -117,7 +106,6 @@ def call_work_agent(mcp_url, api_key, session_id, ohr, query, new_session=False)
             parsed = {"text": inner_text or "[empty response]", "agent_name": "", "country_name": ""}
 
         return parsed, elapsed
-
     except requests.exceptions.Timeout:
         return {"text": "ERROR: Request timed out.", "agent_name": "", "country_name": ""}, round(time.perf_counter() - start, 2)
     except requests.exceptions.HTTPError as e:
@@ -128,35 +116,34 @@ def call_work_agent(mcp_url, api_key, session_id, ohr, query, new_session=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HTML RENDER HELPERS
+# HTML RENDER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def wrap_for_render(html_content: str) -> str:
+def wrap_for_render(html_content, msg_id):
     """
-    Wrap HTML fragment in a doc. Adds submit-interception JS that gathers
-    form values on submit click and posts them to parent window, which then
-    stuffs them into a hidden Streamlit input via clipboard.
+    Wrap HTML fragment. Submit button gathers values and stores them
+    in localStorage under a unique key that Python polls.
     """
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-body {{
-  margin: 0;
-  padding: 4px 8px;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  background: transparent;
-  color: #1e293b;
-  font-size: 14px;
-}}
+  html, body {{
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+    font-size: 14px;
+  }}
+  body {{ padding: 2px 4px; }}
 </style>
 </head>
 <body>
 {html_content}
 <script>
 (function() {{
-  // Intercept any submit button click inside the form
   document.querySelectorAll('form.agent-form').forEach(function(form) {{
     var btn = form.querySelector('button[type="submit"], button.agent-submit');
     if (!btn) return;
@@ -167,20 +154,30 @@ body {{
         if (el.disabled) return;
         var v = (el.value || '').trim();
         if (!v) return;
-        // Prefer visible label text for selects (nicer for user to see)
         if (el.tagName === 'SELECT') {{
           var opt = el.options[el.selectedIndex];
-          if (opt && opt.text && opt.value) v = opt.text.trim();
+          if (opt && opt.text) v = opt.text.trim();
         }}
         values.push(v);
       }});
       var combined = values.join(', ');
-      // Copy to clipboard + notify parent
-      window.parent.postMessage({{type: 'form_submit', value: combined}}, '*');
-      // Visual feedback in the iframe
-      btn.textContent = 'Submitted ✓';
+      if (!combined) return;
+      // Write to top-window localStorage for Python to pick up
+      try {{
+        window.top.localStorage.setItem('mcp_form_submit', combined);
+        window.top.localStorage.setItem('mcp_form_ts', String(Date.now()));
+      }} catch(err) {{
+        window.localStorage.setItem('mcp_form_submit', combined);
+        window.localStorage.setItem('mcp_form_ts', String(Date.now()));
+      }}
+      btn.textContent = '✓ Sending...';
       btn.disabled = true;
       btn.style.background = '#16a34a';
+      // Force parent Streamlit page to reload so Python picks up the value
+      setTimeout(function() {{
+        try {{ window.top.location.reload(); }}
+        catch(e) {{ window.parent.location.reload(); }}
+      }}, 300);
     }});
   }});
 }})();
@@ -189,33 +186,31 @@ body {{
 </html>"""
 
 
-def estimate_height(html_content: str) -> int:
-    """Smart height: compact for plain text, generous for form controls."""
+def estimate_height(html_content):
     if not html_content:
-        return 60
-
+        return 50
+    has_form = any(t in html_content for t in ("<select", "<input", "<button", "<fieldset"))
     char_count = len(html_content)
-    has_form = any(t in html_content for t in ("<select", "<input", "<fieldset", "<button"))
 
     if has_form:
         form_bonus = (
-            html_content.count("<select") * 60
-            + html_content.count("<input") * 50
-            + html_content.count("<fieldset") * 70
-            + html_content.count("<label") * 30
-            + html_content.count("<button") * 40
+            html_content.count("<select") * 55 +
+            html_content.count("<input") * 45 +
+            html_content.count("<fieldset") * 60 +
+            html_content.count("<label") * 25 +
+            html_content.count("<button") * 40
         )
-        text_lines = max(1, char_count // 100)
-        return min(max(120 + text_lines * 20 + form_bonus, 200), 2400)
+        text_lines = max(1, char_count // 110)
+        return min(max(100 + text_lines * 18 + form_bonus, 180), 2200)
     else:
         text_lines = max(1, char_count // 90)
-        return min(max(30 + text_lines * 22, 60), 1200)
+        return min(max(20 + text_lines * 20, 50), 1000)
 
 
-def has_html_tags(text: str) -> bool:
+def has_html_tags(text):
     if not text:
         return False
-    return any(t in text for t in ("<form", "<select", "<input", "<button", "<div", "<p", "<label", "<fieldset"))
+    return any(t in text for t in ("<form", "<select", "<input", "<button", "<div", "<label", "<fieldset"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -224,49 +219,48 @@ def has_html_tags(text: str) -> bool:
 
 st.set_page_config(page_title="MCP Chat Tester", page_icon="💬", layout="wide")
 
-# ── Custom CSS for a cleaner chat feel ────────────────────────────────────────
 st.markdown("""
 <style>
-  /* Tighter chat message spacing */
+  /* Tighter chat spacing */
   [data-testid="stChatMessage"] {
-    padding: 8px 12px;
-    margin-bottom: 8px;
+    padding: 6px 10px !important;
+    margin-bottom: 4px !important;
     border-radius: 12px;
   }
-  /* User message color */
-  [data-testid="stChatMessage"]:has(> div > [data-testid="stChatMessageAvatarUser"]) {
-    background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
+  /* User bubble */
+  [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+    background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%) !important;
   }
-  /* Assistant message color */
-  [data-testid="stChatMessage"]:has(> div > [data-testid="stChatMessageAvatarAssistant"]) {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+  /* Assistant bubble */
+  [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
   }
-  /* Chat input box */
-  [data-testid="stChatInput"] {
-    border-radius: 12px;
+  /* Kill excess space around iframes */
+  [data-testid="stChatMessage"] iframe {
+    display: block;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  [data-testid="stChatMessage"] [data-testid="stCustomComponentV1"] {
+    margin: 0 !important;
   }
   /* Sidebar polish */
-  [data-testid="stSidebar"] {
-    background: #f8fafc;
-  }
-  /* Reduce top padding */
-  .block-container {
-    padding-top: 2rem;
-    padding-bottom: 6rem;
-  }
-  /* Latency badge */
+  [data-testid="stSidebar"] { background: #f8fafc; }
+  .block-container { padding-top: 1.5rem; padding-bottom: 6rem; }
+  /* Badges */
   .msg-badge {
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 12px;
+    border-radius: 10px;
     font-size: 11px;
     font-weight: 500;
-    margin-right: 6px;
+    margin-right: 4px;
   }
   .badge-agent { background: #eef2ff; color: #4f46e5; }
   .badge-country { background: #f0fdf4; color: #16a34a; }
   .badge-time { background: #fef3c7; color: #92400e; }
+  .badge-newsess { background: #fee2e2; color: #b91c1c; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -276,29 +270,41 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "mcp_session_id" not in st.session_state:
     st.session_state.mcp_session_id = None
+if "always_new_session" not in st.session_state:
+    st.session_state.always_new_session = False
 if "next_new_session" not in st.session_state:
     st.session_state.next_new_session = False
 if "config" not in st.session_state:
-    st.session_state.config = {
-        "mcp_url": DEFAULT_MCP_URL,
-        "api_key": DEFAULT_API_KEY,
-        "ohr": DEFAULT_OHR,
-    }
+    st.session_state.config = {"mcp_url": DEFAULT_MCP_URL, "api_key": DEFAULT_API_KEY, "ohr": DEFAULT_OHR}
 if "render_mode" not in st.session_state:
     st.session_state.render_mode = "Rendered"
 if "show_meta" not in st.session_state:
     st.session_state.show_meta = True
-if "pending_form_value" not in st.session_state:
-    st.session_state.pending_form_value = None
+if "last_form_ts" not in st.session_state:
+    st.session_state.last_form_ts = "0"
 
 
-# ── Handle form submission bounced from iframe via URL query params ───────────
-qp = st.query_params
-if "form_submit" in qp:
-    form_val = qp["form_submit"]
-    if form_val:
-        st.session_state.pending_form_value = form_val
-    st.query_params.clear()
+# ── Poll localStorage for form submission ─────────────────────────────────────
+form_submit_val = streamlit_js_eval(
+    js_expressions="localStorage.getItem('mcp_form_submit')",
+    key="poll_submit",
+    want_output=True,
+)
+form_submit_ts = streamlit_js_eval(
+    js_expressions="localStorage.getItem('mcp_form_ts')",
+    key="poll_ts",
+    want_output=True,
+)
+
+pending_from_form = None
+if form_submit_val and form_submit_ts and form_submit_ts != st.session_state.last_form_ts:
+    pending_from_form = form_submit_val
+    st.session_state.last_form_ts = form_submit_ts
+    # Clear localStorage so this doesn't re-trigger
+    streamlit_js_eval(
+        js_expressions="localStorage.removeItem('mcp_form_submit'); localStorage.removeItem('mcp_form_ts');",
+        key="clear_ls",
+    )
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -355,6 +361,17 @@ with st.sidebar:
 
     st.divider()
 
+    st.markdown("### 🔀 New Session Flag")
+    st.session_state.always_new_session = st.checkbox(
+        "Send `new_session=True` on every message",
+        value=st.session_state.always_new_session,
+        help="When ON, every request forces a fresh MCP conversation. Like re-authenticating each turn.",
+    )
+    if st.session_state.next_new_session:
+        st.info("🔄 Next message will use `new_session=True` (one-time)")
+
+    st.divider()
+
     st.markdown("### 👁️ Display")
     st.session_state.render_mode = st.radio(
         "Show agent replies as",
@@ -369,7 +386,7 @@ with st.sidebar:
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.markdown("## 💬 MCP Chat Tester")
-st.caption("Universal Bot V2 test harness. Fill form fields and click Submit — values will send as your next message.")
+st.caption("Universal Bot V2 test harness. Fill form fields and click Submit — values auto-send as your next message.")
 
 if not st.session_state.mcp_session_id:
     st.info("👈 Click **🔌 Init** in the sidebar to connect.")
@@ -391,22 +408,24 @@ for i, msg in enumerate(st.session_state.messages):
             meta = msg.get("meta", {})
 
             if st.session_state.show_meta:
-                badges_html = ""
+                bh = ""
                 if meta.get("agent_name"):
-                    badges_html += f'<span class="msg-badge badge-agent">🎯 {meta["agent_name"]}</span>'
+                    bh += f'<span class="msg-badge badge-agent">🎯 {meta["agent_name"]}</span>'
                 if meta.get("country_name"):
-                    badges_html += f'<span class="msg-badge badge-country">🌍 {meta["country_name"]}</span>'
+                    bh += f'<span class="msg-badge badge-country">🌍 {meta["country_name"]}</span>'
                 if meta.get("elapsed") is not None:
-                    badges_html += f'<span class="msg-badge badge-time">⏱️ {meta["elapsed"]}s</span>'
-                if badges_html:
-                    st.markdown(badges_html, unsafe_allow_html=True)
+                    bh += f'<span class="msg-badge badge-time">⏱️ {meta["elapsed"]}s</span>'
+                if meta.get("new_session"):
+                    bh += f'<span class="msg-badge badge-newsess">🔄 new_session</span>'
+                if bh:
+                    st.markdown(bh, unsafe_allow_html=True)
 
             content = msg["content"]
 
             if st.session_state.render_mode == "Rendered":
                 if has_html_tags(content):
                     st.components.v1.html(
-                        wrap_for_render(content),
+                        wrap_for_render(content, f"msg_{i}"),
                         height=estimate_height(content),
                         scrolling=False,
                     )
@@ -414,13 +433,13 @@ for i, msg in enumerate(st.session_state.messages):
                     st.markdown(content)
             elif st.session_state.render_mode == "Raw HTML":
                 st.code(content, language="html")
-            else:  # Both
+            else:
                 left, right = st.columns(2)
                 with left:
                     st.markdown("**Rendered:**")
                     if has_html_tags(content):
                         st.components.v1.html(
-                            wrap_for_render(content),
+                            wrap_for_render(content, f"msg_{i}"),
                             height=estimate_height(content),
                             scrolling=False,
                         )
@@ -431,46 +450,26 @@ for i, msg in enumerate(st.session_state.messages):
                     st.code(content, language="html")
 
 
-# ── Bridge: iframe postMessage → Streamlit ───────────────────────────────────
-# Injects a listener on the parent page that catches form_submit from iframes
-# and reloads the app with the value as a query param.
-st.components.v1.html("""
-<script>
-(function() {
-  if (window.__mcp_bridge_installed) return;
-  window.__mcp_bridge_installed = true;
-  window.parent.addEventListener('message', function(e) {
-    if (!e.data || e.data.type !== 'form_submit') return;
-    var val = e.data.value || '';
-    if (!val) return;
-    var url = new URL(window.parent.location.href);
-    url.searchParams.set('form_submit', val);
-    window.parent.location.href = url.toString();
-  });
-})();
-</script>
-""", height=0)
-
-
-# ── Chat input + form-submit intake ───────────────────────────────────────────
+# ── Chat input + form intake ──────────────────────────────────────────────────
 user_query = st.chat_input("Type your message...")
 
-# Prefer pending form value from iframe over typed input if both arrived
-if st.session_state.pending_form_value:
-    user_query = st.session_state.pending_form_value
-    st.session_state.pending_form_value = None
+# Form submission takes precedence
+if pending_from_form:
+    user_query = pending_from_form
 
 if user_query:
+    # Determine new_session flag
+    use_new_session = (
+        st.session_state.always_new_session or st.session_state.next_new_session
+    )
+    st.session_state.next_new_session = False  # one-time flag consumed
+
     st.session_state.messages.append({
         "role": "user",
         "content": user_query,
-        "meta": {},
+        "meta": {"new_session": use_new_session},
     })
 
-    new_session_flag = st.session_state.next_new_session
-    st.session_state.next_new_session = False
-
-    # Show user message immediately + spinner while waiting
     with st.chat_message("user", avatar="🧑"):
         st.markdown(user_query)
 
@@ -482,7 +481,7 @@ if user_query:
                 session_id=st.session_state.mcp_session_id,
                 ohr=st.session_state.config["ohr"],
                 query=user_query,
-                new_session=new_session_flag,
+                new_session=use_new_session,
             )
 
     st.session_state.messages.append({
@@ -492,6 +491,7 @@ if user_query:
             "agent_name": parsed.get("agent_name", ""),
             "country_name": parsed.get("country_name", ""),
             "elapsed": elapsed,
+            "new_session": use_new_session,
         },
     })
 
