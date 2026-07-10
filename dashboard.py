@@ -249,7 +249,7 @@ def clean_html_for_preview(html):
 # ══════════════════════════════════════════════════════════════════════════════
 # STREAMLIT APP
 # ══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="MCP Chat", page_icon="💬", layout="wide")
+st.set_page_config(page_title="MCP Chat", page_icon="💬", layout="wide", initial_sidebar_state="expanded")
 
 # ── CSS — Clean light design with depth ───────────────────────────────────────
 st.markdown("""<style>
@@ -272,6 +272,27 @@ html, body, [data-testid="stAppViewContainer"], .stApp,
 /* Kill toolbar & deploy button */
 [data-testid="stToolbar"], [data-testid="stDecoration"],
 header[data-testid="stHeader"], footer { display: none !important; }
+
+/* Force sidebar always visible */
+[data-testid="stSidebar"] {
+  min-width: 320px !important;
+  max-width: 320px !important;
+  width: 320px !important;
+  transform: none !important;
+  position: relative !important;
+}
+[data-testid="stSidebar"][aria-expanded="false"] {
+  min-width: 320px !important;
+  width: 320px !important;
+  transform: none !important;
+  margin-left: 0 !important;
+}
+/* Hide the collapse button so it can't be hidden */
+button[kind="header"] ,
+[data-testid="stSidebar"] button[aria-label="Close sidebar"],
+[data-testid="collapsedControl"] {
+  display: none !important;
+}
 
 .block-container, [data-testid="stMainBlockContainer"] {
   padding-top: 2rem !important;
