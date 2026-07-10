@@ -542,8 +542,6 @@
 
 
 
-
-
 """
 MCP Chat UI — Streamlit test harness for the Universal Bot V2 MCP endpoint.
 Usage:
@@ -763,221 +761,481 @@ def clean_html_for_preview(html):
 # ══════════════════════════════════════════════════════════════════════════════
 # STREAMLIT APP
 # ══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="MCP Chat Tester", page_icon="📡", layout="wide")
+st.set_page_config(page_title="MCP Chat", page_icon="📡", layout="wide")
+
+# ── MEGA CSS — every selector uses !important to beat Streamlit defaults ──────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* ═══════════════════════════════════════════════════════════
+   DESIGN SYSTEM – "Midnight Signal"
+   Palette: deep navy base, warm amber accent, teal secondary
+   Type: system stack (no external font loads = faster)
+   ═══════════════════════════════════════════════════════════ */
 
+/* ── 0. GLOBAL RESET ──────────────────────────────────────── */
 :root {
-  --ink-950: #0B0E16;
-  --ink-900: #0F1420;
-  --ink-850: #131A2B;
-  --ink-800: #161C2C;
-  --ink-700: #1E2740;
-  --hairline: #232B42;
-  --text-primary: #E8EAF2;
-  --text-secondary: #9AA3BE;
-  --text-tertiary: #6B7390;
-  --copper: #F2A65A;
-  --copper-dim: #C97D3B;
-  --teal: #56D8C4;
-  --green: #7BD88F;
-  --coral: #F1685E;
-  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  --bg-base:     #0C0F1A;
+  --bg-raised:   #111627;
+  --bg-surface:  #161C2E;
+  --bg-hover:    #1B2340;
+  --border:      #232D4A;
+  --border-lit:  #2E3B5E;
+  --text-1:      #EDF0F7;
+  --text-2:      #A0AABF;
+  --text-3:      #697080;
+  --amber:       #F5A623;
+  --amber-dim:   #C4851C;
+  --amber-glow:  rgba(245,166,35,0.15);
+  --amber-ghost: rgba(245,166,35,0.08);
+  --teal:        #4DD9C0;
+  --teal-dim:    rgba(77,217,192,0.12);
+  --green:       #5FD068;
+  --red:         #F06B5E;
+  --font:        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono:        "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
 }
 
+/* Kill Streamlit default backgrounds everywhere */
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stApp"], .stApp,
+[data-testid="stAppViewBlockContainer"],
+.main .block-container,
+[data-testid="stMainBlockContainer"] {
+  background-color: var(--bg-base) !important;
+  color: var(--text-1) !important;
+  font-family: var(--font) !important;
+}
+.stApp {
+  background:
+    radial-gradient(ellipse 80% 50% at 5% 0%, rgba(245,166,35,0.06), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 95% 5%, rgba(77,217,192,0.05), transparent 55%),
+    var(--bg-base) !important;
+}
+
+/* Header bar — transparent */
+header[data-testid="stHeader"],
+[data-testid="stHeader"] {
+  background: transparent !important;
+  backdrop-filter: none !important;
+}
+/* Top toolbar / decoration bar */
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+
+/* Main content container */
+.block-container, [data-testid="stMainBlockContainer"] {
+  padding-top: 1.8rem !important;
+  padding-bottom: 7rem !important;
+  max-width: 880px !important;
+}
+
+/* All text defaults */
+p, li, span, div, label, [class*="css"] {
+  color: var(--text-1) !important;
+  font-family: var(--font) !important;
+}
+small, .stCaption, [data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+  color: var(--text-3) !important;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--text-1) !important; }
+
+/* Dividers */
+hr, [data-testid="stDivider"] {
+  border-color: var(--border) !important;
+  opacity: 1 !important;
+}
+
+/* ── 1. SIDEBAR ───────────────────────────────────────────── */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebar"] > div > div,
+section[data-testid="stSidebar"] {
+  background-color: var(--bg-raised) !important;
+  background-image: none !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] *,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span {
+  color: var(--text-2) !important;
+  font-family: var(--font) !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+  color: var(--text-1) !important;
+}
+
+/* Sidebar section labels */
+.sb-label {
+  font-family: var(--mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  color: var(--amber) !important;
+  margin: 0 0 10px 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.sb-label::before {
+  content: '' !important;
+  width: 5px !important; height: 5px !important; border-radius: 50% !important;
+  background: var(--amber) !important;
+  box-shadow: 0 0 6px var(--amber) !important;
+  flex-shrink: 0 !important;
+}
+
+/* ── 2. INPUTS (text, selectbox, radio, checkbox) ─────────── */
+/* Text inputs */
+[data-testid="stTextInput"] > div > div > input,
+input[type="text"],
+input[type="password"] {
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--text-1) !important;
+  font-family: var(--mono) !important;
+  font-size: 13px !important;
+  caret-color: var(--amber) !important;
+  padding: 8px 12px !important;
+}
+[data-testid="stTextInput"] > div > div > input:focus,
+input[type="text"]:focus,
+input[type="password"]:focus {
+  border-color: var(--amber) !important;
+  box-shadow: 0 0 0 2px var(--amber-glow) !important;
+  outline: none !important;
+}
+/* Input labels */
+[data-testid="stTextInput"] label,
+[data-testid="stSelectbox"] label,
+.stSelectbox label {
+  color: var(--text-2) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+
+/* Select / dropdown */
+[data-baseweb="select"],
+[data-baseweb="select"] > div {
+  background-color: var(--bg-surface) !important;
+  border-color: var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+}
+[data-baseweb="select"] > div:hover,
+[data-baseweb="select"] > div:focus-within {
+  border-color: var(--amber) !important;
+}
+[data-baseweb="select"] span,
+[data-baseweb="select"] div[role="option"] {
+  color: var(--text-1) !important;
+}
+/* Dropdown popover */
+[data-baseweb="popover"],
+[data-baseweb="popover"] > div {
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+}
+[data-baseweb="menu"] li,
+ul[role="listbox"] li {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-1) !important;
+}
+[data-baseweb="menu"] li:hover,
+ul[role="listbox"] li:hover,
+[data-baseweb="menu"] li[aria-selected="true"] {
+  background-color: var(--bg-hover) !important;
+}
+
+/* Radio buttons */
+[data-testid="stRadio"] label {
+  color: var(--text-2) !important;
+  font-size: 13px !important;
+}
+[data-testid="stRadio"] [role="radiogroup"] label div[data-testid="stMarkdownContainer"] p {
+  color: var(--text-2) !important;
+}
+
+/* Checkbox */
+[data-testid="stCheckbox"] label span {
+  color: var(--text-2) !important;
+  font-size: 13px !important;
+}
+
+/* ── 3. BUTTONS ───────────────────────────────────────────── */
+.stButton > button,
+[data-testid="stBaseButton-secondary"],
+button[kind="secondary"] {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-1) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+  font-family: var(--font) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  padding: 6px 16px !important;
+  transition: all 0.15s ease !important;
+}
+.stButton > button:hover,
+[data-testid="stBaseButton-secondary"]:hover {
+  background-color: var(--bg-hover) !important;
+  border-color: var(--amber-dim) !important;
+  color: var(--amber) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+}
+
+/* Primary buttons */
+[data-testid="stBaseButton-primary"],
+button[kind="primary"],
+[data-testid="stFormSubmitButton"] button {
+  background: linear-gradient(135deg, var(--amber), var(--amber-dim)) !important;
+  color: #0C0F1A !important;
+  border: none !important;
+  border-radius: var(--radius-sm) !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  padding: 8px 20px !important;
+  transition: all 0.15s ease !important;
+}
+[data-testid="stBaseButton-primary"]:hover,
+button[kind="primary"]:hover,
+[data-testid="stFormSubmitButton"] button:hover {
+  box-shadow: 0 6px 18px rgba(245,166,35,0.4) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ── 4. ALERTS (success, warning, info, error) ────────────── */
+[data-testid="stAlert"],
+[data-testid="stAlertContainer"],
+[data-testid="stAlert"] > div,
+.stAlert, .element-container .stAlert {
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  color: var(--text-1) !important;
+}
+[data-testid="stAlert"] p { color: var(--text-1) !important; }
+/* Success green left border */
+[data-baseweb="notification"][kind="positive"],
+div[data-testid="stAlert"]:has(svg[data-testid="stIconMaterial"]) {
+  border-left: 3px solid var(--teal) !important;
+}
+
+/* ── 5. CHAT MESSAGES ─────────────────────────────────────── */
+[data-testid="stChatMessage"] {
+  background-color: var(--bg-raised) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  padding: 16px 18px !important;
+  margin-bottom: 12px !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25) !important;
+}
+/* User message — warm tint, right-aligned feel */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+  background: linear-gradient(135deg, rgba(245,166,35,0.10), rgba(245,166,35,0.03)) !important;
+  border-color: rgba(245,166,35,0.20) !important;
+  margin-left: 12% !important;
+}
+/* Assistant message */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+  background-color: var(--bg-raised) !important;
+  margin-right: 12% !important;
+}
+/* Avatar circles */
+[data-testid="stChatMessageAvatarUser"],
+[data-testid="stChatMessageAvatarAssistant"] {
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* ── 6. BADGES ────────────────────────────────────────────── */
+.msg-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-family: var(--mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  margin-right: 6px !important;
+  margin-bottom: 4px !important;
+  border: 1px solid transparent !important;
+}
+.badge-agent   { background: var(--teal-dim) !important; color: var(--teal) !important; border-color: rgba(77,217,192,0.25) !important; }
+.badge-country { background: rgba(95,208,104,0.10) !important; color: var(--green) !important; border-color: rgba(95,208,104,0.25) !important; }
+.badge-time    { background: var(--amber-ghost) !important; color: var(--amber) !important; border-color: rgba(245,166,35,0.25) !important; }
+.badge-newsess { background: rgba(240,107,94,0.10) !important; color: var(--red) !important; border-color: rgba(240,107,94,0.25) !important; }
+
+/* ── 7. HERO HEADER ───────────────────────────────────────── */
+.hero-wrap {
+  display: flex !important;
+  align-items: flex-end !important;
+  justify-content: space-between !important;
+  gap: 20px !important;
+  padding-bottom: 20px !important;
+  margin-bottom: 24px !important;
+  border-bottom: 1px solid var(--border) !important;
+  flex-wrap: wrap !important;
+}
+.hero-eyebrow {
+  font-family: var(--mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+  color: var(--teal) !important;
+  margin-bottom: 6px !important;
+}
+.hero-title {
+  font-size: 28px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.025em !important;
+  color: var(--text-1) !important;
+  margin: 0 0 4px 0 !important;
+  line-height: 1.1 !important;
+}
+.hero-sub {
+  font-size: 14px !important;
+  color: var(--text-3) !important;
+  margin: 0 !important;
+  max-width: 44ch !important;
+  line-height: 1.5 !important;
+}
+.status-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-family: var(--mono) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.05em !important;
+  padding: 7px 14px !important;
+  border-radius: 999px !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  white-space: nowrap !important;
+}
+.status-pill--live { color: var(--amber) !important; border-color: rgba(245,166,35,0.30) !important; }
+.status-pill--off  { color: var(--text-3) !important; }
+.status-dot {
+  width: 7px !important; height: 7px !important;
+  border-radius: 50% !important;
+  background: currentColor !important;
+  flex-shrink: 0 !important;
+}
+.status-pill--live .status-dot {
+  animation: pulse 2s ease-in-out infinite !important;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,166,35,0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(245,166,35,0); }
+}
+
+/* ── 8. FORMS ─────────────────────────────────────────────── */
+[data-testid="stForm"],
+[data-testid="stForm"] > div {
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  padding: 16px !important;
+}
+
+/* ── 9. CODE BLOCKS ───────────────────────────────────────── */
+[data-testid="stCodeBlock"] pre,
+pre, code {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--text-1) !important;
+  font-family: var(--mono) !important;
+  font-size: 12.5px !important;
+}
+
+/* ── 10. CHAT INPUT (bottom bar) ──────────────────────────── */
+[data-testid="stChatInput"],
+[data-testid="stChatInput"] > div {
+  background-color: var(--bg-raised) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+}
+[data-testid="stChatInput"] textarea {
+  color: var(--text-1) !important;
+  font-family: var(--font) !important;
+  font-size: 14px !important;
+  caret-color: var(--amber) !important;
+}
+[data-testid="stChatInput"] textarea::placeholder {
+  color: var(--text-3) !important;
+}
+/* Fade gradient at bottom */
+[data-testid="stBottomBlockContainer"] {
+  background: linear-gradient(0deg, var(--bg-base), var(--bg-base) 60%, transparent) !important;
+}
+
+/* ── 11. SPINNER ──────────────────────────────────────────── */
+[data-testid="stSpinner"] > div,
+.stSpinner > div { color: var(--amber) !important; }
+
+/* ── 12. SCROLLBAR ────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px !important; }
+::-webkit-scrollbar-track { background: var(--bg-base) !important; }
+::-webkit-scrollbar-thumb { background: var(--border) !important; border-radius: 8px !important; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-lit) !important; }
+
+/* ── 13. FOCUS + a11y ─────────────────────────────────────── */
+a:focus-visible, button:focus-visible, input:focus-visible,
+[tabindex]:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--amber) !important;
+  outline-offset: 2px !important;
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
 }
+::selection { background: rgba(245,166,35,0.30) !important; }
 
-html, body, [class*="css"] { font-family: var(--font-display); }
-
-/* ── App shell ───────────────────────────────────────────── */
-.stApp {
-  background:
-    radial-gradient(ellipse 900px 500px at 6% -8%, rgba(242,166,90,0.10), transparent 60%),
-    radial-gradient(ellipse 900px 600px at 100% 8%, rgba(86,216,196,0.08), transparent 55%),
-    var(--ink-950);
-}
-.stApp::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.035;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-[data-testid="stHeader"] { background: transparent; }
-.block-container {
-  padding-top: 1.6rem;
-  padding-bottom: 7rem;
-  max-width: 940px;
-  position: relative;
-  z-index: 1;
-}
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li,
-[data-testid="stMarkdownContainer"] strong { color: var(--text-primary); }
-[data-testid="stCaptionContainer"] { color: var(--text-tertiary) !important; }
-hr { border-color: var(--hairline) !important; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--ink-950); }
-::-webkit-scrollbar-thumb { background: var(--ink-700); border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: var(--copper-dim); }
-::selection { background: rgba(242,166,90,0.35); }
-a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid var(--copper) !important; outline-offset: 2px;
+/* ── 14. MESSAGE COUNT CHIP ───────────────────────────────── */
+.msg-count-chip {
+  font-family: var(--mono) !important;
+  font-size: 11px !important;
+  color: var(--text-3) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  display: inline-block !important;
+  padding: 5px 10px !important;
+  border-radius: var(--radius-sm) !important;
 }
 
-/* ── Hero ────────────────────────────────────────────────── */
-.hero {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 24px; padding-bottom: 18px; margin-bottom: 20px;
-  border-bottom: 1px solid var(--hairline); flex-wrap: wrap;
+/* ── 15. MISC STREAMLIT OVERRIDES ─────────────────────────── */
+/* Expander */
+[data-testid="stExpander"] {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
 }
-.hero-eyebrow {
-  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  letter-spacing: 0.18em; text-transform: uppercase; color: var(--teal);
-  display: block; margin-bottom: 8px;
-}
-.hero-title {
-  font-family: var(--font-display); font-weight: 800; font-size: 30px;
-  letter-spacing: -0.02em; margin: 0 0 6px 0; color: var(--text-primary);
-}
-.hero-sub { font-size: 14px; color: var(--text-secondary); margin: 0; max-width: 48ch; }
-.status-chip {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-family: var(--font-mono); font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
-  padding: 8px 14px; border-radius: 999px; border: 1px solid var(--hairline);
-  background: var(--ink-800); white-space: nowrap;
-}
-.status-live { color: var(--copper); border-color: rgba(242,166,90,0.35); }
-.status-offline { color: var(--text-tertiary); }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.status-live .status-dot { animation: ping 1.8s ease-out infinite; }
-@keyframes ping {
-  0%   { box-shadow: 0 0 0 0 rgba(242,166,90,0.55); }
-  100% { box-shadow: 0 0 0 9px rgba(242,166,90,0); }
-}
-
-/* ── Sidebar ─────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-  background: linear-gradient(180deg, var(--ink-900), var(--ink-850));
-  border-right: 1px solid var(--hairline);
-}
-[data-testid="stSidebar"] * { color: var(--text-primary); }
-[data-testid="stSidebar"] hr { border-color: var(--hairline) !important; margin: 1.1rem 0; }
-.sidebar-eyebrow {
-  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--copper);
-  margin: 2px 0 12px 0; display: flex; align-items: center; gap: 7px;
-}
-.sidebar-eyebrow::before {
-  content: ''; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--copper); box-shadow: 0 0 8px rgba(242,166,90,0.7); flex-shrink: 0;
-}
-.msg-count {
-  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
-  background: var(--ink-800); border: 1px solid var(--hairline); display: inline-block;
-  padding: 5px 10px; border-radius: 8px; letter-spacing: 0.02em;
-}
-
-/* ── Chat messages ───────────────────────────────────────── */
-[data-testid="stChatMessage"] {
-  background: var(--ink-850) !important;
-  border: 1px solid var(--hairline) !important;
-  border-radius: 16px !important;
-  padding: 14px 16px !important;
-  margin-bottom: 14px !important;
-  animation: rise 0.22s ease both;
-  box-shadow: 0 8px 20px -14px rgba(0,0,0,0.6);
-}
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-  background: linear-gradient(135deg, rgba(242,166,90,0.14), rgba(242,166,90,0.05)) !important;
-  border-color: rgba(242,166,90,0.25) !important;
-  flex-direction: row-reverse;
-  margin-left: 14%;
-}
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
-  margin-right: 14%;
-}
-[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"] {
-  background: var(--ink-700) !important; border: 1px solid var(--hairline);
-}
-.msg-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
-  padding: 3px 9px; border-radius: 6px; margin-right: 6px; margin-bottom: 4px; border: 1px solid transparent;
-}
-.badge-agent { background: rgba(86,216,196,0.12); color: var(--teal); border-color: rgba(86,216,196,0.28); }
-.badge-country { background: rgba(123,216,143,0.12); color: var(--green); border-color: rgba(123,216,143,0.28); }
-.badge-time { background: rgba(242,166,90,0.12); color: var(--copper); border-color: rgba(242,166,90,0.28); }
-.badge-newsess { background: rgba(241,104,94,0.12); color: var(--coral); border-color: rgba(241,104,94,0.28); }
-
-/* ── Buttons ─────────────────────────────────────────────── */
-.stButton button, [data-testid="stFormSubmitButton"] button, button[kind="secondary"], button[kind="primary"] {
-  font-family: var(--font-display) !important; font-weight: 600 !important;
-  border-radius: 10px !important; border: 1px solid var(--hairline) !important;
-  background: var(--ink-800) !important; color: var(--text-primary) !important;
-  transition: all 0.15s ease !important;
-}
-.stButton button:hover, [data-testid="stFormSubmitButton"] button:hover {
-  transform: translateY(-1px); border-color: var(--copper) !important;
-  box-shadow: 0 6px 16px -8px rgba(242,166,90,0.4);
-}
-button[kind="primary"] {
-  background: linear-gradient(135deg, var(--copper), var(--copper-dim)) !important;
-  border-color: transparent !important; color: #1A1206 !important;
-}
-button[kind="primary"]:hover { box-shadow: 0 8px 20px -8px rgba(242,166,90,0.55) !important; }
-
-/* ── Inputs ──────────────────────────────────────────────── */
-[data-testid="stTextInput"] input {
-  background: var(--ink-800) !important; border: 1px solid var(--hairline) !important;
-  border-radius: 10px !important; color: var(--text-primary) !important;
-  font-family: var(--font-mono) !important; font-size: 13px !important;
-}
-[data-testid="stTextInput"] input:focus {
-  border-color: var(--copper) !important; box-shadow: 0 0 0 3px rgba(242,166,90,0.15) !important;
-}
-[data-baseweb="select"] > div {
-  background: var(--ink-800) !important; border-color: var(--hairline) !important; border-radius: 10px !important;
-}
-[data-baseweb="popover"] { background: var(--ink-800) !important; }
-[data-baseweb="menu"] li { background: var(--ink-800) !important; color: var(--text-primary) !important; }
-[data-baseweb="menu"] li:hover { background: var(--ink-700) !important; }
-[data-testid="stRadio"] label, [data-testid="stCheckbox"] label { color: var(--text-primary) !important; font-size: 13.5px; }
-
-/* ── Alerts / form / code ────────────────────────────────── */
-[data-testid="stAlert"], [data-testid="stAlertContainer"] {
-  background: var(--ink-800) !important; border: 1px solid var(--hairline) !important;
-  border-radius: 12px !important; color: var(--text-primary) !important;
-}
-[data-testid="stForm"] {
-  background: var(--ink-850); border: 1px solid var(--hairline);
-  border-radius: 16px; padding: 18px 18px 6px 18px;
-}
-[data-testid="stCodeBlock"] pre {
-  background: var(--ink-900) !important; border: 1px solid var(--hairline) !important; border-radius: 10px !important;
-}
-[data-testid="stCodeBlock"] code { font-family: var(--font-mono) !important; font-size: 12.5px !important; }
-
-/* ── Chat input ──────────────────────────────────────────── */
-[data-testid="stChatInput"] {
-  background: var(--ink-850) !important; border: 1px solid var(--hairline) !important; border-radius: 14px !important;
-}
-[data-testid="stChatInput"] textarea { color: var(--text-primary) !important; font-family: var(--font-display) !important; }
-[data-testid="stBottomBlockContainer"] { background: linear-gradient(180deg, transparent, var(--ink-950) 45%) !important; }
+/* Tooltip / help icon */
+[data-testid="stTooltipIcon"] svg { color: var(--text-3) !important; }
+/* Markdown links */
+a { color: var(--amber) !important; }
+a:hover { color: var(--teal) !important; }
+/* Remove Streamlit bottom "Made with Streamlit" */
+footer { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
+
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -993,21 +1251,23 @@ if "render_mode" not in st.session_state:
     st.session_state.render_mode = "Interactive Form"
 if "show_meta" not in st.session_state:
     st.session_state.show_meta = True
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="sidebar-eyebrow">Configuration</div>', unsafe_allow_html=True)
+    st.markdown('<p class="sb-label">Configuration</p>', unsafe_allow_html=True)
     st.session_state.config["mcp_url"] = st.text_input("MCP URL", st.session_state.config["mcp_url"])
     st.session_state.config["api_key"] = st.text_input("API Key", st.session_state.config["api_key"], type="password")
     st.session_state.config["ohr"] = st.text_input("OHR", st.session_state.config["ohr"])
     st.divider()
-    st.markdown('<div class="sidebar-eyebrow">Session</div>', unsafe_allow_html=True)
+
+    st.markdown('<p class="sb-label">Session</p>', unsafe_allow_html=True)
     if st.session_state.mcp_session_id:
         st.success(f"**Connected**\n\n`{st.session_state.mcp_session_id[:28]}...`")
     else:
         st.warning("Not connected")
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🛰️ Connect", use_container_width=True, type="primary"):
+        if st.button("Connect", use_container_width=True, type="primary"):
             try:
                 with st.spinner("Connecting..."):
                     sid = initialize_mcp_session(
@@ -1019,7 +1279,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Init failed: {e}")
     with c2:
-        if st.button("↺ New Session", use_container_width=True):
+        if st.button("New Session", use_container_width=True):
             try:
                 with st.spinner("Resetting..."):
                     sid = initialize_mcp_session(
@@ -1035,45 +1295,60 @@ with st.sidebar:
                 st.rerun()
             except Exception as e:
                 st.error(f"Reset failed: {e}")
-    if st.button("🗑️ Clear Chat", use_container_width=True):
+    if st.button("Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
     st.divider()
-    st.markdown('<div class="sidebar-eyebrow">Auto New-Session</div>', unsafe_allow_html=True)
+
+    st.markdown('<p class="sb-label">Options</p>', unsafe_allow_html=True)
     st.session_state.always_new_session = st.checkbox(
-        "Send `new_session=True` on every message",
+        "Send new_session=True every message",
         value=st.session_state.always_new_session,
     )
     if st.session_state.next_new_session:
-        st.info("↺ Next message will use new_session=True")
+        st.info("Next message will use new_session=True")
     st.divider()
-    st.markdown('<div class="sidebar-eyebrow">Display Mode</div>', unsafe_allow_html=True)
+
+    st.markdown('<p class="sb-label">Display</p>', unsafe_allow_html=True)
     st.session_state.render_mode = st.radio(
         "Show agent replies as",
         ["Interactive Form", "HTML Preview", "Raw HTML"],
         index=["Interactive Form", "HTML Preview", "Raw HTML"].index(st.session_state.render_mode),
-        help="Interactive Form = native Streamlit dropdowns (recommended). HTML Preview = read-only styled preview. Raw HTML = source.",
+        help="Interactive Form = native Streamlit dropdowns. HTML Preview = read-only styled. Raw HTML = source.",
     )
     st.session_state.show_meta = st.checkbox("Show badges", value=st.session_state.show_meta)
     st.divider()
-    st.markdown(f'<span class="msg-count">💬 {len(st.session_state.messages)} messages</span>', unsafe_allow_html=True)
-# ── Main ──────────────────────────────────────────────────────────────────────
+
+    st.markdown(
+        f'<span class="msg-count-chip">{len(st.session_state.messages)} messages</span>',
+        unsafe_allow_html=True,
+    )
+
+# ── Hero Header ───────────────────────────────────────────────────────────────
 _connected = bool(st.session_state.mcp_session_id)
-_status_label = f"LIVE · {st.session_state.mcp_session_id[:10]}…" if _connected else "OFFLINE"
-_status_class = "status-live" if _connected else "status-offline"
+if _connected:
+    _pill_label = f"LIVE &middot; {st.session_state.mcp_session_id[:12]}&hellip;"
+    _pill_cls = "status-pill status-pill--live"
+else:
+    _pill_label = "OFFLINE"
+    _pill_cls = "status-pill status-pill--off"
+
 st.markdown(f"""
-<div class="hero">
+<div class="hero-wrap">
   <div>
-    <span class="hero-eyebrow">MCP · Universal Bot V2</span>
+    <div class="hero-eyebrow">MCP &middot; Universal Bot V2</div>
     <h1 class="hero-title">MCP Chat Tester</h1>
-    <p class="hero-sub">Interactive test harness — real dropdowns, real submissions, real telemetry.</p>
+    <p class="hero-sub">Interactive test harness &mdash; real dropdowns, real submissions, real telemetry.</p>
   </div>
-  <span class="status-chip {_status_class}"><span class="status-dot"></span>{_status_label}</span>
+  <span class="{_pill_cls}"><span class="status-dot"></span>{_pill_label}</span>
 </div>
 """, unsafe_allow_html=True)
+
 if not st.session_state.mcp_session_id:
-    st.info("👈 Click **Connect** in the sidebar to link this tester to the MCP endpoint.")
+    st.info("Click **Connect** in the sidebar to start a session.")
     st.stop()
+
+# ── send_message (unchanged logic) ────────────────────────────────────────────
 def send_message(text, use_new_session):
     """Add user msg, call MCP, add assistant msg."""
     st.session_state.messages.append({
@@ -1083,8 +1358,8 @@ def send_message(text, use_new_session):
     })
     with st.chat_message("user", avatar="🧑"):
         st.markdown(text)
-    with st.chat_message("assistant", avatar="🛰️"):
-        with st.spinner("Awaiting agent response…"):
+    with st.chat_message("assistant", avatar="🤖"):
+        with st.spinner("Agent thinking..."):
             parsed, elapsed = call_work_agent(
                 mcp_url=st.session_state.config["mcp_url"],
                 api_key=st.session_state.config["api_key"],
@@ -1103,13 +1378,14 @@ def send_message(text, use_new_session):
             "new_session": use_new_session,
         },
     })
-# ── Render chat history ───────────────────────────────────────────────────────
+
+# ── Render chat history (unchanged logic) ─────────────────────────────────────
 for i, msg in enumerate(st.session_state.messages):
     role = msg["role"]
     if role == "system":
         st.info(f"🔄 {msg['content']}")
         continue
-    with st.chat_message(role, avatar="🧑" if role == "user" else "🛰️"):
+    with st.chat_message(role, avatar="🧑" if role == "user" else "🤖"):
         if role == "user":
             st.markdown(msg["content"])
             continue
@@ -1133,9 +1409,7 @@ for i, msg in enumerate(st.session_state.messages):
             st.code(content, language="html")
             continue
         if mode == "HTML Preview":
-            # Static preview only, no interaction
             if "<" in content and ">" in content:
-                # Render as-is via markdown (unsafe html)
                 st.markdown(clean_html_for_preview(content), unsafe_allow_html=True)
             else:
                 st.markdown(content)
@@ -1143,15 +1417,12 @@ for i, msg in enumerate(st.session_state.messages):
         # mode == "Interactive Form"
         fields = parse_agent_form(content)
         if not fields:
-            # No parseable form, just show text/HTML as-is
             if "<" in content and ">" in content:
                 st.markdown(clean_html_for_preview(content), unsafe_allow_html=True)
             else:
                 st.markdown(content)
             continue
-        # Only the LATEST assistant message gets interactive form
         is_latest_assistant = (i == len(st.session_state.messages) - 1)
-        # Info text (agent prose)
         for f in fields:
             if f["kind"] == "info":
                 st.markdown(f["text"])
@@ -1159,7 +1430,6 @@ for i, msg in enumerate(st.session_state.messages):
         if not interactive_fields:
             continue
         if not is_latest_assistant:
-            # Show static preview for historical assistant messages
             st.caption("*(Form from earlier turn — interact with the latest message.)*")
             for f in interactive_fields:
                 if f["kind"] == "select":
@@ -1167,8 +1437,6 @@ for i, msg in enumerate(st.session_state.messages):
                 elif f["kind"] == "text":
                     st.markdown(f"**{f['label']}** — [text input]")
             continue
-        # Build native Streamlit widgets
-        st.markdown('<div class="sidebar-eyebrow" style="margin:10px 0 2px 0;">Respond to agent</div>', unsafe_allow_html=True)
         with st.form(key=f"agent_form_{i}", clear_on_submit=False):
             widget_vals = {}
             for j, f in enumerate(interactive_fields):
@@ -1193,17 +1461,17 @@ for i, msg in enumerate(st.session_state.messages):
                         placeholder=f.get("placeholder", ""),
                         key=widget_key,
                     )
-            submitted = st.form_submit_button("📤 Send", type="primary", use_container_width=False)
+            submitted = st.form_submit_button("Submit", type="primary", use_container_width=False)
             if submitted:
-                # Combine values into a comma-separated string (matches how real UI would post)
                 combined = ", ".join(str(v).strip() for v in widget_vals.values() if str(v).strip())
                 if combined:
                     use_new = st.session_state.always_new_session or st.session_state.next_new_session
                     st.session_state.next_new_session = False
                     send_message(combined, use_new)
                     st.rerun()
+
 # ── Chat input ────────────────────────────────────────────────────────────────
-user_query = st.chat_input("Message the agent…")
+user_query = st.chat_input("Type your message...")
 if user_query:
     use_new = st.session_state.always_new_session or st.session_state.next_new_session
     st.session_state.next_new_session = False
